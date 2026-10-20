@@ -2826,6 +2826,7 @@ nsresult nsMsgCompose::ProcessReplyFlags() {
       mType == nsIMsgCompType::ReplyToGroup ||
       mType == nsIMsgCompType::ReplyToSender ||
       mType == nsIMsgCompType::ReplyToSenderAndGroup ||
+      mType == nsIMsgCompType::ReplyWithTemplate ||
       mType == nsIMsgCompType::ForwardAsAttachment ||
       mType == nsIMsgCompType::ForwardInline ||
       mType == nsIMsgCompType::Redirect ||

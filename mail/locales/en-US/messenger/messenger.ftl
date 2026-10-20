@@ -365,6 +365,10 @@ mail-context-menu-reply =
     .label = Reply
     .accesskey = R
 
+mail-context-menu-reply-with-template =
+    .label = Reply with Template
+    .accesskey = W
+
 mail-context-menu-forward-redirect =
     .label = Forward and Redirect
     .accesskey = F

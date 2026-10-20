@@ -488,6 +488,17 @@ var mailContextMenu = {
       window.threadTree && numSelectedMessages > 1
     );
 
+    this._initReplyWithTemplate(
+      !onSpecialItem &&
+        numSelectedMessages == 1 &&
+        !isDummyMessage &&
+        !FeedUtils.isFeedMessage(message) &&
+        !folder?.isSpecialFolder(
+          Ci.nsMsgFolderFlags.Drafts | Ci.nsMsgFolderFlags.Templates,
+          true
+        )
+    );
+
     this._ensureSubmenuVisibility();
     // Special case: mark menu shouldn't be shown on external messages.
     if (isDummyMessage) {
@@ -738,10 +749,90 @@ var mailContextMenu = {
             "cmd_copyDecryptedTo",
             event.target._folder
           );
+        } else if (
+          document
+            .getElementById("mailContext-replyWithTemplatePopup")
+            .contains(event.target)
+        ) {
+          this._replyWithTemplate(event.target.value, event);
         }
         break;
       }
     }
+  },
+
+  // Reply with Template sub-menu
+
+  /**
+   * Rebuild the Reply with Template popup from the messages in the Templates
+   * folder of Local Folders. An empty popup hides the menu.
+   *
+   * @param {boolean} show - Whether replying with a template is possible for
+   *   the current selection.
+   */
+  _initReplyWithTemplate(show) {
+    const popup = document.getElementById("mailContext-replyWithTemplatePopup");
+    popup.replaceChildren();
+    if (!show) {
+      return;
+    }
+
+    let templatesFolder;
+    try {
+      templatesFolder =
+        MailServices.accounts.localFoldersServer.rootFolder.getFolderWithFlags(
+          Ci.nsMsgFolderFlags.Templates
+        );
+    } catch (ex) {
+      // No Local Folders account.
+      return;
+    }
+    if (!templatesFolder) {
+      return;
+    }
+
+    const templates = [...templatesFolder.messages]
+      .map(hdr => ({
+        label: hdr.mime2DecodedSubject,
+        uri: templatesFolder.getUriForMsg(hdr),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+
+    for (const { label, uri } of templates) {
+      const item = document.createXULElement("menuitem");
+      item.setAttribute("label", label);
+      item.value = uri;
+      popup.appendChild(item);
+    }
+  },
+
+  /**
+   * Open a reply to the selected message, using a template as the body.
+   *
+   * @param {string} templateURI - URI of the template message.
+   * @param {Event} event - The command event.
+   */
+  _replyWithTemplate(templateURI, event) {
+    const message = gDBView.hdrForFirstSelectedMessage;
+    const [identity] = MailUtils.getIdentityForHeader(
+      message,
+      Ci.nsIMsgCompType.ReplyWithTemplate
+    );
+    // The template is run through the template code path, which opens the
+    // compose window with the message being replied to as origMsgHdr.
+    // ComposeStartup() then turns it into a reply.
+    MailServices.compose.OpenComposeWindow(
+      null,
+      message,
+      templateURI,
+      Ci.nsIMsgCompType.ReplyWithTemplate,
+      event.shiftKey
+        ? Ci.nsIMsgCompFormat.OppositeOfDefault
+        : Ci.nsIMsgCompFormat.Default,
+      identity,
+      null,
+      top.msgWindow
+    );
   },
 
   // Tags sub-menu

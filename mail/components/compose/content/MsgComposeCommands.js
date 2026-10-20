@@ -618,7 +618,6 @@ var stateListener = {
       case Ci.nsIMsgCompType.ReplyToSender:
       case Ci.nsIMsgCompType.ReplyToGroup:
       case Ci.nsIMsgCompType.ReplyToSenderAndGroup:
-      case Ci.nsIMsgCompType.ReplyWithTemplate:
       case Ci.nsIMsgCompType.ReplyToList:
         this.NotifyComposeBodyReadyReply();
         break;
@@ -633,6 +632,8 @@ var stateListener = {
         break;
       case Ci.nsIMsgCompType.Draft:
       case Ci.nsIMsgCompType.Template:
+      // The body is the template, not a quote, so leave it as it is.
+      case Ci.nsIMsgCompType.ReplyWithTemplate:
       case Ci.nsIMsgCompType.EditAsNew:
         break;
 
@@ -4597,6 +4598,48 @@ function onPasteOrDrop(e) {
   }
 }
 
+/**
+ * Check whether the compose window was opened with "Reply with Template".
+ * Templates are always opened through the template code path, which passes
+ * along the header given to OpenComposeWindow() as origMsgHdr. For a plain
+ * template that is the template itself, for a reply it is the message being
+ * replied to.
+ *
+ * @param {nsIMsgComposeParams} params
+ * @returns {boolean}
+ */
+function isReplyWithTemplate(params) {
+  const hdr = params.type == Ci.nsIMsgCompType.Template && params.origMsgHdr;
+  return (
+    !!hdr?.folder &&
+    !(hdr.flags & Ci.nsMsgMessageFlags.Template) &&
+    !hdr.folder.isSpecialFolder(Ci.nsMsgFolderFlags.Templates, true)
+  );
+}
+
+/**
+ * Turn a template compose into a reply to params.origMsgHdr, keeping the
+ * template's body and attachments.
+ *
+ * @param {nsIMsgComposeParams} params
+ */
+function setupReplyWithTemplate(params) {
+  const hdr = params.origMsgHdr;
+  const fields = params.composeFields;
+
+  params.type = Ci.nsIMsgCompType.ReplyWithTemplate;
+  // Used for the References header, the Replied flag and Fcc.
+  params.originalMsgURI = hdr.folder.getUriForMsg(hdr);
+
+  fields.to = MailServices.headerParser
+    .parseEncodedHeaderW(hdr.getStringProperty("replyTo") || hdr.author)
+    .join(", ");
+  fields.subject = "Re: " + hdr.mime2DecodedSubject;
+  // Reply from the identity picked for the original message, not the one
+  // that saved the template.
+  fields.from = "";
+}
+
 /* eslint-disable complexity */
 async function ComposeStartup() {
   // Findbar overlay
@@ -4871,6 +4914,10 @@ async function ComposeStartup() {
         composeFields.body = args.body;
       }
     }
+  }
+
+  if (isReplyWithTemplate(params)) {
+    setupReplyWithTemplate(params);
   }
 
   gComposeType = params.type;
