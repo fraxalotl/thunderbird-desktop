@@ -56,7 +56,7 @@ struct FakeServerIntegrationTests {
       subject: "Integration test ✅",
       body: "Sent from the integration test.\n.dot line"
     )
-    let data = outgoing.render(messageID: "<it@example.com>")
+    let data = try outgoing.render(messageID: "<it@example.com>")
     try await SMTPClient(server: smtp, password: "secret").send(
       data, from: "fraser@example.com", to: outgoing.allRecipients.map(\.email))
     try await client.append(data, to: "Sent", flags: [MessageFlag.seen])
@@ -66,6 +66,64 @@ struct FakeServerIntegrationTests {
     #expect(sentSummaries.contains { $0.subject == "Integration test ✅" })
 
     await client.disconnect()
+  }
+
+  @Test func searchesManagesFoldersAndIdles() async throws {
+    let client = IMAPClient(server: imap, password: "secret")
+    try await client.connect()
+    let hits = try await client.search(SearchQuery(text: "Thursday", field: .all), in: "INBOX")
+    #expect(!hits.isEmpty)
+    let unicodeHits = try await client.search(SearchQuery(text: "Grüße", field: .body), in: "INBOX")
+    #expect(!unicodeHits.isEmpty)
+
+    try await client.create("Receipts")
+    try await client.rename("Receipts", to: "Bills")
+    #expect(try await client.listFolders().contains { $0.path == "Bills" })
+    try await client.delete(folder: "Bills")
+    #expect(try await client.listFolders().contains { $0.path == "Bills" } == false)
+
+    let idler = IMAPClient(server: imap, credential: .password("secret"), timeout: 30)
+    try await idler.connect()
+    async let changed = idler.idleUntilChange(in: "INBOX")
+    try await Task.sleep(for: .milliseconds(300))
+    let message = OutgoingMessage(
+      from: MailAddress(email: "push@example.com"), to: [MailAddress(email: "fraser@example.com")],
+      subject: "Pushed", body: "IDLE test")
+    try await client.append(try message.render(messageID: "<idle@example.com>"), to: "INBOX", flags: [])
+    #expect(try await changed)
+    await idler.disconnect()
+    await client.disconnect()
+  }
+
+  @Test func downloadsWithPOP3() async throws {
+    let pop = POP3Client(
+      server: ServerConfig(host: "127.0.0.1", port: 2110, security: .none, username: "fraser"), credential: .password("x"))
+    try await pop.verify()
+    var delivered: [Data] = []
+    let seen = try await pop.download(skipping: [], deleteFromServer: false) { delivered.append($0) }
+    #expect(delivered.count == seen.count)
+    #expect(delivered.contains { ParsedMessage(data: $0).subject == "Quarterly report 📊" })
+    var again: [Data] = []
+    _ = try await pop.download(skipping: seen, deleteFromServer: false) { again.append($0) }
+    #expect(again.isEmpty)
+  }
+
+  @Test func readsAndPostsNews() async throws {
+    let news = NNTPClient(server: ServerConfig(host: "127.0.0.1", port: 2119, security: .none, username: ""), credential: nil)
+    let groups = try await news.listGroups()
+    #expect(groups.contains { $0.name == "local.thunderbird.test" })
+    let info = try await news.group("local.thunderbird.test")
+    let overview = try await news.overview(info.low...info.high)
+    #expect(overview.contains { $0.subject == "Welcome to the newsgroup" })
+    let reply = try #require(overview.first { $0.subject.hasPrefix("Re:") })
+    #expect(ParsedMessage(data: try await news.article(reply.uid, in: "local.thunderbird.test")).textBody?.contains("Glad") == true)
+
+    var post = OutgoingMessage(from: MailAddress(name: "Fraser", email: "fraser@example.com"), to: [], subject: "Hello news", body: "Posting from Swift.")
+    post.newsgroups = ["local.thunderbird.test"]
+    try await news.post(try post.render(messageID: "<news@example.com>"))
+    let after = try await news.group("local.thunderbird.test")
+    #expect(after.high == info.high + 1)
+    await news.close()
   }
 
   @Test func rejectsMissingRecipients() async {

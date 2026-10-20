@@ -6,11 +6,15 @@ import Foundation
 
 public struct SMTPClient: Sendable {
   private let server: ServerConfig
-  private let password: String?
+  private let credential: Credential?
+
+  public init(server: ServerConfig, credential: Credential?) {
+    self.server = server
+    self.credential = credential
+  }
 
   public init(server: ServerConfig, password: String?) {
-    self.server = server
-    self.password = password
+    self.init(server: server, credential: password.map(Credential.password))
   }
 
   private struct Reply {
@@ -68,7 +72,16 @@ public struct SMTPClient: Sendable {
   }
 
   private func authenticate(_ connection: LineConnection, extensions: [String]) async throws {
-    guard let password else { throw MailError.missingPassword(server.host) }
+    guard let credential else { throw MailError.missingPassword(server.host) }
+    if let token = credential.xoauth2(user: server.username) {
+      let reply = try await send("AUTH XOAUTH2 \(token)", on: connection, expect: [235, 334])
+      if reply.code == 334 {
+        _ = try? await send("", on: connection, expect: [535])
+        throw MailError.authenticationFailed(reply.text)
+      }
+      return
+    }
+    guard case .password(let password) = credential else { return }
     let mechanisms = extensions
       .first { $0.uppercased().hasPrefix("AUTH") }?
       .uppercased()

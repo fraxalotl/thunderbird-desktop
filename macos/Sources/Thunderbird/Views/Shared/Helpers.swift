@@ -84,6 +84,7 @@ extension Date {
 struct AvatarView: View {
   let address: MailAddress?
   var size: CGFloat = 36
+  var image: Data?
 
   private var initials: String {
     let source = address?.name ?? address?.email ?? "?"
@@ -98,6 +99,19 @@ struct AvatarView: View {
   }
 
   var body: some View {
+    if let image, let nsImage = NSImage(data: image) {
+      Image(nsImage: nsImage)
+        .resizable()
+        .scaledToFill()
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .accessibilityHidden(true)
+    } else {
+      initialsView
+    }
+  }
+
+  private var initialsView: some View {
     Text(initials.isEmpty ? "?" : initials)
       .font(.system(size: size * 0.4, weight: .semibold, design: .rounded))
       .foregroundStyle(.white)

@@ -153,7 +153,7 @@ import Testing
       references: ["<parent@example.com>"],
       attachments: [OutgoingAttachment(filename: "notes.txt", mimeType: "text/plain", data: Data("notes".utf8))]
     )
-    let data = outgoing.render(messageID: "<id@example.com>")
+    let data = try outgoing.render(messageID: "<id@example.com>")
     let text = try #require(String(data: data, encoding: .utf8))
     #expect(!text.contains("secret@example.com"))
     #expect(!text.replacingOccurrences(of: "\r\n", with: "").contains("\n"))

@@ -18,47 +18,6 @@ public enum ConnectionSecurity: String, Codable, Sendable, CaseIterable, Hashabl
   }
 }
 
-public struct ServerConfig: Codable, Sendable, Hashable {
-  public var host: String
-  public var port: Int
-  public var security: ConnectionSecurity
-  public var username: String
-
-  public init(host: String, port: Int, security: ConnectionSecurity, username: String) {
-    self.host = host
-    self.port = port
-    self.security = security
-    self.username = username
-  }
-}
-
-public struct MailAccount: Codable, Sendable, Identifiable, Hashable {
-  public var id: UUID
-  public var fullName: String
-  public var email: String
-  public var label: String
-  public var signature: String
-  public var incoming: ServerConfig
-  public var outgoing: ServerConfig
-
-  public init(
-    id: UUID = UUID(), fullName: String, email: String, label: String? = nil,
-    signature: String = "", incoming: ServerConfig, outgoing: ServerConfig
-  ) {
-    self.id = id
-    self.fullName = fullName
-    self.email = email
-    self.label = label ?? email
-    self.signature = signature
-    self.incoming = incoming
-    self.outgoing = outgoing
-  }
-
-  public var address: MailAddress { MailAddress(name: fullName, email: email) }
-  public var incomingKeychainKey: String { "\(id.uuidString).imap" }
-  public var outgoingKeychainKey: String { "\(id.uuidString).smtp" }
-}
-
 public struct MailAddress: Codable, Sendable, Hashable {
   public var name: String?
   public var email: String
@@ -126,7 +85,7 @@ public struct MailAddress: Codable, Sendable, Hashable {
 }
 
 public enum FolderRole: String, Codable, Sendable, Hashable {
-  case inbox, drafts, templates, sent, archive, junk, trash, all, flagged, normal
+  case inbox, drafts, templates, sent, archive, junk, trash, all, flagged, outbox, normal
 
   public var sortRank: Int {
     switch self {
@@ -139,7 +98,8 @@ public enum FolderRole: String, Codable, Sendable, Hashable {
     case .trash: 6
     case .all: 7
     case .flagged: 8
-    case .normal: 9
+    case .outbox: 9
+    case .normal: 10
     }
   }
 
@@ -154,6 +114,7 @@ public enum FolderRole: String, Codable, Sendable, Hashable {
     case .trash: "trash"
     case .all: "tray.2"
     case .flagged: "star"
+    case .outbox: "tray.and.arrow.up"
     case .normal: "folder"
     }
   }
@@ -213,6 +174,7 @@ public struct RemoteFolder: Codable, Sendable, Hashable, Identifiable {
     case "trash", "deleted items", "deleted messages", "bin": return .trash
     case "junk", "spam", "junk e-mail", "junk email": return .junk
     case "archive", "archives": return .archive
+    case "unsent messages", "outbox": return .outbox
     default: return .normal
     }
   }
@@ -230,14 +192,16 @@ public struct MessageSummary: Codable, Sendable, Hashable, Identifiable {
   public var messageID: String?
   public var inReplyTo: String?
   public var hasAttachment: Bool
+  public var references: [String]
 
   public var id: UInt32 { uid }
 
   public init(
     uid: UInt32, subject: String, from: [MailAddress], to: [MailAddress], cc: [MailAddress],
     date: Date, size: Int, flags: Set<String>, messageID: String?, inReplyTo: String?,
-    hasAttachment: Bool
+    hasAttachment: Bool, references: [String] = []
   ) {
+    self.references = references
     self.uid = uid
     self.subject = subject
     self.from = from
@@ -255,6 +219,64 @@ public struct MessageSummary: Codable, Sendable, Hashable, Identifiable {
   public var isFlagged: Bool { flags.contains(MessageFlag.flagged) }
   public var isAnswered: Bool { flags.contains(MessageFlag.answered) }
   public var isForwarded: Bool { flags.contains(MessageFlag.forwarded) }
+  public var isJunk: Bool { flags.contains(MessageFlag.junk) }
+  public var tags: [MessageTag] { MessageTag.defaults.filter { flags.contains($0.keyword) } }
+
+  public init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    uid = try c.decode(UInt32.self, forKey: .uid)
+    subject = try c.decode(String.self, forKey: .subject)
+    from = try c.decode([MailAddress].self, forKey: .from)
+    to = try c.decode([MailAddress].self, forKey: .to)
+    cc = try c.decode([MailAddress].self, forKey: .cc)
+    date = try c.decode(Date.self, forKey: .date)
+    size = try c.decode(Int.self, forKey: .size)
+    flags = try c.decode(Set<String>.self, forKey: .flags)
+    messageID = try c.decodeIfPresent(String.self, forKey: .messageID)
+    inReplyTo = try c.decodeIfPresent(String.self, forKey: .inReplyTo)
+    hasAttachment = try c.decode(Bool.self, forKey: .hasAttachment)
+    references = try c.decodeIfPresent([String].self, forKey: .references) ?? []
+  }
+
+  /// Builds a summary from a raw message, for stores that keep whole messages locally.
+  public init(uid: UInt32, data: Data, flags: Set<String>, fallbackDate: Date = Date()) {
+    let headers = MIMEParser.parseHeaders(data)
+    let contentType = headers["Content-Type"]?.lowercased() ?? ""
+    self.init(
+      uid: uid,
+      subject: headers.decoded("Subject") ?? "",
+      from: MailAddress.parseList(headers["From"] ?? ""),
+      to: MailAddress.parseList(headers["To"] ?? headers["Newsgroups"] ?? ""),
+      cc: MailAddress.parseList(headers["Cc"] ?? ""),
+      date: headers["Date"].flatMap(MailDate.parse) ?? fallbackDate,
+      size: data.count,
+      flags: flags,
+      messageID: headers["Message-ID"]?.trimmingCharacters(in: .whitespaces),
+      inReplyTo: headers["In-Reply-To"]?.trimmingCharacters(in: .whitespaces),
+      hasAttachment: contentType.contains("multipart/mixed"),
+      references: MessageSummary.parseReferences(headers["References"])
+    )
+  }
+
+  public static func parseReferences(_ value: String?) -> [String] {
+    guard let value else { return [] }
+    var result: [String] = []
+    var current = ""
+    var inside = false
+    for char in value {
+      if char == "<" {
+        inside = true
+        current = "<"
+      } else if char == ">" && inside {
+        current.append(">")
+        result.append(current)
+        inside = false
+      } else if inside {
+        current.append(char)
+      }
+    }
+    return result
+  }
 }
 
 public enum MessageFlag {
@@ -264,6 +286,8 @@ public enum MessageFlag {
   public static let deleted = "\\Deleted"
   public static let draft = "\\Draft"
   public static let forwarded = "$Forwarded"
+  public static let junk = "$Junk"
+  public static let notJunk = "$NotJunk"
 
   /// IMAP system flags are case-insensitive; normalise them so set lookups work.
   static func normalize(_ flag: String) -> String {
@@ -274,7 +298,9 @@ public enum MessageFlag {
     case "\\deleted": deleted
     case "\\draft": draft
     case "$forwarded": forwarded
-    default: flag
+    case "$junk", "junk": junk
+    case "$notjunk", "nonjunk", "notjunk": notJunk
+    default: flag.hasPrefix("$label") ? flag.lowercased() : flag
     }
   }
 }
@@ -287,6 +313,8 @@ public enum MailError: LocalizedError, Sendable {
   case authenticationFailed(String)
   case missingPassword(String)
   case invalidRecipients
+  case unsupported(String)
+  case needsSignIn(String)
 
   public var errorDescription: String? {
     switch self {
@@ -297,6 +325,8 @@ public enum MailError: LocalizedError, Sendable {
     case .authenticationFailed(let detail): "Login failed: \(detail)"
     case .missingPassword(let host): "No password is saved for \(host)."
     case .invalidRecipients: "Add at least one valid recipient."
+    case .unsupported(let what): "\(what) isn't supported for this account."
+    case .needsSignIn(let host): "Sign in to \(host) again from Account Settings."
     }
   }
 

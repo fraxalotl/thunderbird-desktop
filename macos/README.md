@@ -1,6 +1,6 @@
 # Thunderbird for macOS (native)
 
-A native SwiftUI rewrite of the Thunderbird desktop mail client for macOS 26, using Liquid Glass.
+A native SwiftUI rewrite of the Thunderbird desktop client for macOS 26, using Liquid Glass.
 It is a standalone Swift package and does not use the Gecko build (`mach`).
 
 ## Building
@@ -13,30 +13,81 @@ Requires Xcode 26 (Swift 6.2) on macOS 26.
 swift test              # unit tests
 ```
 
-`build-app.sh` wraps the SwiftPM executable in an ad-hoc signed app bundle that uses the icon from
-`mail/branding/thunderbird`. The bundle identifier is `net.thunderbird.mac`, so it does not clash
-with the Gecko build of Thunderbird.
+`build-app.sh` wraps the SwiftPM executable in an app bundle that uses the icon from
+`mail/branding/thunderbird`. It also bundles `librnp.dylib` (OpenPGP) from a local Thunderbird
+build (`obj-*/dist/bin`) or an installed Thunderbird. The bundle identifier is
+`net.thunderbird.mac`, so it does not clash with the Gecko build of Thunderbird.
+
+Ad-hoc signed builds look like a different app to Keychain after every rebuild, so macOS asks
+before releasing saved passwords. To avoid that, sign with a development identity: add a free
+Apple Development certificate in Xcode › Settings › Accounts, then build with
+`CODESIGN_IDENTITY="Apple Development" ./build-app.sh`.
+
+## Features
+
+The app is organised into spaces, like Thunderbird's Spaces toolbar: Mail, Address Book,
+Calendar, Tasks and Chat.
+
+**Mail**
+- IMAP (with IDLE push), POP3 (downloads into local storage, with an option to leave mail on the
+  server), Local Folders, and NNTP newsgroups with subscription management.
+- Password and OAuth2 sign-in (PKCE, loopback redirect, refresh tokens in the Keychain, XOAUTH2
+  for IMAP, POP3 and SMTP).
+- Account setup looks up server settings the way Thunderbird's account hub does. You can also
+  import account settings from an existing Thunderbird profile (prefs.js).
+- Multiple identities per account.
+- A three-pane window with a Liquid Glass toolbar, quick filter bar (unread, starred,
+  attachment, tag), threaded or flat lists, unified folders, and native window tabs for messages.
+- Search on the server or locally across a folder, an account or everything, with Saved Search
+  folders.
+- Folder management: create, rename, delete, empty Trash/Junk, mark as read. Drag messages to
+  folders to move them (hold Option to copy), including between accounts.
+- Tags (Important, Work, Personal, To Do, Later), stars, archive.
+- Message filters, run on new mail or on demand.
+- An adaptive junk filter that learns from Junk / Not Junk.
+- Notifications for new mail.
+- Compose in plain text or rich text (HTML) with a glass format bar and address autocomplete
+  from Contacts and Collected Addresses.
+- Drafts (with autosave), templates, Send Later (Unsent Messages), and Thunderbird's
+  "forgot an attachment?" reminder.
+- The reader renders messages in a WKWebView with scripts disabled. Remote content is blocked
+  by a Content-Security-Policy until you allow it.
+- The reader also offers:
+  - View Source, Print and Save As.
+  - Convert to Event or Task.
+  - Add the sender to the Address Book.
+- End-to-end encryption:
+  - OpenPGP through RNP (Thunderbird's own engine, loaded at runtime): key generation, import,
+    export, and PGP/MIME or inline sign, encrypt, decrypt and verify.
+  - S/MIME through the Security framework's CMS, using certificates in your Keychain.
+
+**Address Book.** Uses the Contacts framework, so iCloud, Google, Exchange and CardDAV address
+books all appear. It also keeps Thunderbird's Collected Addresses, lists (groups), and vCard
+import and export.
+
+**Calendar and Tasks.** Use EventKit, so every calendar and reminder list on the Mac is
+available.
+- Day, week, multiweek and month views, with drag to reschedule.
+- An event editor with repeat rules and alerts.
+- Task lists with due dates and priorities.
+- A Today Pane in Mail.
+- Email invitations get Accept, Maybe and Decline (sent as iMIP replies) and Add to Calendar.
+
+**Chat.** IRC (with SASL), Matrix (login, sync, rooms, invitations) and XMPP (STARTTLS, roster,
+group chats), with conversation logs and notifications for mentions and direct messages.
 
 ## Layout
 
 - `Sources/ThunderbirdCore`: no UI code.
-  - `IMAPClient`, `IMAPParser`: IMAP4rev1 with literals, LITERAL+, AUTHENTICATE PLAIN, LIST-STATUS,
-    MOVE, UIDPLUS and APPEND.
-  - `SMTPClient`: ESMTP with AUTH PLAIN/LOGIN and dot-stuffing.
-  - `Connection`: TLS, STARTTLS (via `URLSessionStreamTask`) and plaintext.
-  - `MIMEParser`, `MIMEDecoder`, `MessageBuilder`: parsing incoming messages and building outgoing
-    ones (RFC 2045-2047, RFC 2231).
-  - `Autoconfig`: looks up server settings the same way Thunderbird's account hub does (the
-    provider's autoconfig, then `.well-known`, then the Thunderbird ISPDB, then a guess).
-  - `AccountService`: runs one account's operations one at a time and keeps the on-disk cache current.
-  - `MailCache`: the cache, under `~/Library/Application Support/Thunderbird for macOS/Cache`.
-  - `Keychain`: passwords are stored in the macOS Keychain.
+  - Protocols: IMAP, SMTP, POP3, NNTP, IRC, Matrix and XMPP.
+  - The `MailBackend` stores (IMAP, POP3, local and NNTP).
+  - MIME parsing and composition, OAuth2 and autoconfig.
+  - OpenPGP and S/MIME.
+  - iCalendar parsing and iMIP replies.
+  - Filters, the junk classifier and threading.
 - `Sources/Thunderbird`: the SwiftUI app.
-  - The three-pane window (`NavigationSplitView`) has a Liquid Glass toolbar, a quick filter bar,
-    a glass message header card, and glass attachment chips and action buttons.
-  - The compose window, account setup, and the Settings window (General and Accounts).
-  - Messages render in a WKWebView with JavaScript disabled. Remote content is blocked by a
-    Content-Security-Policy until the user allows it.
+  - Stores: `MailStore`, `ContactsStore`, `CalendarStore` and `ChatStore`.
+  - Views for each space, compose, settings and account setup.
 
 ## Trying it without a real account
 
@@ -44,13 +95,28 @@ with the Gecko build of Thunderbird.
 python3 Support/fake-mail-server.py
 ```
 
-This starts an in-memory IMAP server on 127.0.0.1:2143 and an SMTP server on 2025, preloaded with
-sample mail. In account setup, choose "Configure manually", set both servers to `127.0.0.1` with
-security "None", and use any password. `TB_FAKE_SERVER=1 swift test` runs the integration tests
-against it.
+This starts in-memory IMAP (127.0.0.1:2143), SMTP (2025), POP3 (2110) and NNTP (2119) servers
+with sample mail and a sample newsgroup. In a debug build, launching with
+`TB_DEMO_ACCOUNTS=1` adds IMAP, POP3 and News accounts that point at them;
+`TB_DEMO_ACCOUNTS=remove` takes them away again:
 
-## Not yet ported
+```sh
+open --env TB_DEMO_ACCOUNTS=1 build/Thunderbird.app
+```
 
-OAuth2 sign-in (Gmail and Microsoft need app passwords for now), POP3, NNTP, local folders,
-filters, threading, full-text search, drafts and templates, HTML composition, OpenPGP/S-MIME,
-the address book, calendar, chat and add-ons.
+To run the integration tests against the fake servers, and the OpenPGP tests against a
+throwaway keyring:
+
+```sh
+TB_FAKE_SERVER=1 TB_OPENPGP_DIR=$(mktemp -d) TB_LIBRNP=../../obj-tb/dist/bin/librnp.dylib swift test
+```
+
+## Differences from Thunderbird
+
+- **Add-ons** aren't supported. Thunderbird add-ons are WebExtensions (and, for older ones,
+  experiments) that run inside Gecko, and a native app has no runtime to host them.
+- **OAuth2** needs your own client registrations (Settings › OAuth). Thunderbird's registered
+  client IDs belong to Mozilla, so this app doesn't reuse them.
+- **Exchange (EWS/Graph)** and **Matrix end-to-end encryption** aren't implemented yet.
+- **Contacts and calendars** come from macOS's own accounts (System Settings › Internet Accounts)
+  rather than Thunderbird-specific CardDAV/CalDAV setup.

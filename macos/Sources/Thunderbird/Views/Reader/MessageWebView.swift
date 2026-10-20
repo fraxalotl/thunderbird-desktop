@@ -9,6 +9,7 @@ import WebKit
 struct MessageWebView: NSViewRepresentable {
   let rendered: MessageHTML.Rendered
   var onMailto: (URL) -> Void
+  @Environment(ReaderController.self) private var reader
 
   func makeCoordinator() -> Coordinator {
     Coordinator(onMailto: onMailto)
@@ -23,6 +24,7 @@ struct MessageWebView: NSViewRepresentable {
     webView.navigationDelegate = context.coordinator
     webView.allowsMagnification = true
     webView.setValue(false, forKey: "drawsBackground")
+    reader.webView = webView
     return webView
   }
 

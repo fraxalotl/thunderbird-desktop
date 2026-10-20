@@ -7,6 +7,11 @@ import Foundation
 public struct HeaderField: Sendable, Hashable {
   public var name: String
   public var value: String
+
+  public init(name: String, value: String) {
+    self.name = name
+    self.value = value
+  }
 }
 
 public struct MIMEHeaders: Sendable {
@@ -114,6 +119,8 @@ public struct MIMEPart: Sendable {
   public var parameters: [String: String]
   public var body: Data
   public var children: [MIMEPart]
+  /// The part's exact source bytes (headers and body), needed to verify signatures.
+  public var raw: Data = Data()
 
   public var isMultipart: Bool { contentType.hasPrefix("multipart/") }
   public var charset: String? { parameters["charset"] }
@@ -132,6 +139,11 @@ public struct MIMEPart: Sendable {
   }
 
   public var isAttachment: Bool {
+    if ["application/pgp-signature", "application/pkcs7-signature", "application/x-pkcs7-signature",
+      "application/pgp-encrypted"].contains(contentType)
+    {
+      return false
+    }
     if disposition?.value == "attachment" {
       return true
     }
@@ -210,7 +222,9 @@ public enum MIMEParser {
     if contentType.hasPrefix("multipart/"), let boundary = parameters["boundary"], !boundary.isEmpty {
       let childDefault = contentType == "multipart/digest" ? "message/rfc822" : "text/plain"
       let children = splitMultipart(rawBody, boundary: boundary).map { parse(bytes: $0, defaultType: childDefault) }
-      return MIMEPart(headers: headers, contentType: contentType, parameters: parameters, body: Data(), children: children)
+      return MIMEPart(
+        headers: headers, contentType: contentType, parameters: parameters, body: Data(), children: children,
+        raw: Data(bytes))
     }
 
     let encoding = headers["Content-Transfer-Encoding"]?.lowercased().trimmingCharacters(in: .whitespaces)
@@ -220,7 +234,8 @@ public enum MIMEParser {
     case "quoted-printable": body = MIMEDecoder.quotedPrintable(Data(rawBody))
     default: body = Data(rawBody)
     }
-    return MIMEPart(headers: headers, contentType: contentType, parameters: parameters, body: body, children: [])
+    return MIMEPart(
+      headers: headers, contentType: contentType, parameters: parameters, body: body, children: [], raw: Data(bytes))
   }
 
   private static func splitMultipart(_ body: ArraySlice<UInt8>, boundary: String) -> [ArraySlice<UInt8>] {
@@ -325,6 +340,9 @@ public struct ParsedMessage: Sendable {
       textBody = part.text
     case "text/html", "text/plain":
       appendAttachment(part)
+    case "application/pgp-signature", "application/pkcs7-signature", "application/x-pkcs7-signature",
+      "application/pgp-encrypted":
+      break
     default:
       if let contentID = part.contentID {
         inline[contentID] = part

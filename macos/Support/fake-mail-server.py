@@ -3,9 +3,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-"""A tiny in-memory IMAP (port 2143) and SMTP (port 2025) server with sample mail, for
-trying the app without a real account. Log in with any username and password, with
-connection security set to "None"."""
+"""A tiny in-memory IMAP (port 2143), SMTP (2025), POP3 (2110) and NNTP (2119) server with
+sample mail, for trying the app without a real account. Log in with any username and
+password, with connection security set to "None"."""
 
 import asyncio
 import email.utils
@@ -17,6 +17,8 @@ from email.policy import SMTP
 HOST = "127.0.0.1"
 IMAP_PORT = 2143
 SMTP_PORT = 2025
+POP3_PORT = 2110
+NNTP_PORT = 2119
 
 
 def sample(sender, subject, body, *, hours_ago, html=None, seen=False, flagged=False, attachment=None, cc=None):
@@ -117,6 +119,22 @@ def build_mailboxes():
 
 
 MAILBOXES = build_mailboxes()
+IDLERS = []
+
+
+def notify_idlers():
+    for event in IDLERS:
+        event.set()
+
+
+NEWS = {
+    "local.thunderbird.test": [
+        sample("Ada <ada@analytical.example>", "Welcome to the newsgroup", "First post!", hours_ago=10, seen=True),
+        sample("Grace <grace@navy.example>", "Re: Welcome to the newsgroup", "Glad to be here.", hours_ago=5, seen=True),
+    ]
+}
+for _number, _article in enumerate(NEWS["local.thunderbird.test"], start=1):
+    _article["uid"] = _number
 
 
 def quote(value):
@@ -190,7 +208,49 @@ async def handle_imap(reader, writer):
         box = MAILBOXES.get(selected) if selected else None
 
         if command == "CAPABILITY":
-            send("* CAPABILITY IMAP4rev1 MOVE UIDPLUS\r\n")
+            send("* CAPABILITY IMAP4rev1 MOVE UIDPLUS IDLE\r\n")
+        elif command == "IDLE":
+            event = asyncio.Event()
+            IDLERS.append(event)
+            send("+ idling\r\n")
+            await writer.drain()
+            done = asyncio.ensure_future(reader.readline())
+            waiter = asyncio.ensure_future(event.wait())
+            finished, _ = await asyncio.wait({done, waiter}, return_when=asyncio.FIRST_COMPLETED)
+            IDLERS.remove(event)
+            if waiter in finished:
+                send(f"* {len(MAILBOXES['INBOX']['messages'])} EXISTS\r\n")
+                await writer.drain()
+                await done
+            else:
+                waiter.cancel()
+        elif command in ("CREATE", "SUBSCRIBE", "DELETE", "RENAME", "CLOSE"):
+            names = re.findall(r'"((?:[^"\\]|\\.)*)"', args)
+            if command == "CREATE" and names[0] not in MAILBOXES:
+                MAILBOXES[names[0]] = {"attrs": "", "messages": [], "next_uid": 1}
+            elif command == "DELETE":
+                MAILBOXES.pop(names[0], None)
+            elif command == "RENAME":
+                MAILBOXES[names[1]] = MAILBOXES.pop(names[0])
+            if command == "CLOSE":
+                selected = None
+        elif command in ("UID SEARCH", "SEARCH"):
+            needles = [n.lower() for n in re.findall(r'"((?:[^"\\]|\\.)*)"', args)]
+            literal = re.search(r"\{(\d+)\+?\}$", args)
+            if literal:
+                send("+ go\r\n")
+                await writer.drain()
+                needles.append((await reader.readexactly(int(literal.group(1)))).decode().lower())
+                await reader.readline()
+            text = args
+            hits = []
+            for message in box["messages"]:
+                raw = message["data"].decode("utf-8", "replace").lower()
+                if "unseen" in text.lower() and "\\Seen" in message["flags"]:
+                    continue
+                if all(n in raw for n in needles if n not in ("message-id",)):
+                    hits.append(str(message["uid"]))
+            send(f"* SEARCH {' '.join(hits)}\r\n")
         elif command == "LOGIN":
             pass
         elif command == "LIST":
@@ -257,11 +317,17 @@ async def handle_imap(reader, writer):
                 target["messages"].append(copy)
             if command == "UID MOVE":
                 box["messages"] = [m for m in box["messages"] if m["uid"] not in wanted]
+        elif command == "STORE":
+            _, op, flags = args.split(" ", 2)
+            for message in box["messages"]:
+                if op.startswith("+"):
+                    message["flags"] |= set(flags.strip("()").split())
         elif command in ("UID EXPUNGE", "EXPUNGE"):
             box["messages"] = [m for m in box["messages"] if "\\Deleted" not in m["flags"]]
         elif command == "APPEND":
-            match = re.match(r'"((?:[^"\\]|\\.)*)" \(([^)]*)\) \{(\d+)(\+?)\}', args)
-            name, flags, size, plus = match.groups()
+            match = re.match(r'(?:"((?:[^"\\]|\\.)*)"|(\S+))(?: \(([^)]*)\))?(?: "[^"]*")? \{(\d+)(\+?)\}', args)
+            quoted, atom, flags, size, plus = match.groups()
+            name, flags = quoted or atom, flags or ""
             if not plus:
                 send("+ go ahead\r\n")
                 await writer.drain()
@@ -272,6 +338,8 @@ async def handle_imap(reader, writer):
                 {"data": data, "flags": set(flags.split()), "time": time.time(), "uid": target["next_uid"]}
             )
             target["next_uid"] += 1
+            if name == "INBOX":
+                notify_idlers()
         elif command == "LOGOUT":
             send("* BYE\r\n")
             send(f"{tag} OK done\r\n")
@@ -322,12 +390,120 @@ async def handle_smtp(reader, writer):
     writer.close()
 
 
+async def handle_pop3(reader, writer):
+    def send(text):
+        writer.write(text.encode() if isinstance(text, str) else text)
+
+    messages = list(MAILBOXES["INBOX"]["messages"])
+    deleted = set()
+    send("+OK fake POP3 ready\r\n")
+    await writer.drain()
+    while True:
+        line = await reader.readline()
+        if not line:
+            break
+        parts = line.decode().strip().split(" ")
+        command = parts[0].upper()
+        if command in ("USER", "PASS", "NOOP", "AUTH"):
+            send("+OK\r\n")
+        elif command == "UIDL":
+            send("+OK\r\n")
+            for index, message in enumerate(messages, start=1):
+                if index not in deleted:
+                    send(f"{index} uid-{message['uid']}\r\n")
+            send(".\r\n")
+        elif command == "RETR":
+            data = messages[int(parts[1]) - 1]["data"].replace(b"\r\n.", b"\r\n..")
+            send(f"+OK {len(data)} octets\r\n")
+            send(data + (b"" if data.endswith(b"\r\n") else b"\r\n") + b".\r\n")
+        elif command == "DELE":
+            deleted.add(int(parts[1]))
+            send("+OK\r\n")
+        elif command == "QUIT":
+            send("+OK bye\r\n")
+            await writer.drain()
+            break
+        else:
+            send("-ERR unknown\r\n")
+        await writer.drain()
+    writer.close()
+
+
+async def handle_nntp(reader, writer):
+    def send(text):
+        writer.write(text.encode() if isinstance(text, str) else text)
+
+    group = None
+    send("200 fake NNTP ready\r\n")
+    await writer.drain()
+    while True:
+        line = await reader.readline()
+        if not line:
+            break
+        parts = line.decode().strip().split(" ")
+        command = parts[0].upper()
+        if command == "MODE":
+            send("200 reader\r\n")
+        elif command == "LIST":
+            send("215 list follows\r\n")
+            for name, articles in NEWS.items():
+                send(f"{name} {len(articles)} 1 y\r\n")
+            send(".\r\n")
+        elif command == "GROUP":
+            group = parts[1]
+            articles = NEWS.get(group, [])
+            send(f"211 {len(articles)} 1 {len(articles)} {group}\r\n")
+        elif command in ("OVER", "XOVER"):
+            low, _, high = parts[1].partition("-")
+            send("224 overview\r\n")
+            for article in NEWS[group]:
+                if int(low) <= article["uid"] <= int(high or low):
+                    headers = article["data"].split(b"\r\n\r\n", 1)[0].decode()
+                    fields = dict(
+                        (k.strip().lower(), v.strip())
+                        for k, _, v in (h.partition(":") for h in re.sub(r"\r\n[ \t]+", " ", headers).split("\r\n"))
+                    )
+                    send(
+                        f"{article['uid']}\t{fields.get('subject', '')}\t{fields.get('from', '')}\t{fields.get('date', '')}\t"
+                        f"{fields.get('message-id', '')}\t{fields.get('references', '')}\t{len(article['data'])}\t1\r\n"
+                    )
+            send(".\r\n")
+        elif command == "ARTICLE":
+            article = NEWS[group][int(parts[1]) - 1]
+            send(f"220 {parts[1]} article\r\n")
+            send(article["data"] + b".\r\n")
+        elif command == "POST":
+            send("340 send article\r\n")
+            await writer.drain()
+            lines = []
+            while True:
+                data_line = await reader.readline()
+                if data_line in (b".\r\n", b".\n"):
+                    break
+                lines.append(data_line[1:] if data_line.startswith(b"..") else data_line)
+            data = b"".join(lines)
+            target = re.search(rb"(?im)^newsgroups:\s*([^\r\n,]+)", data)
+            name = target.group(1).decode().strip() if target else "local.thunderbird.test"
+            NEWS.setdefault(name, []).append({"data": data, "flags": set(), "time": time.time(), "uid": len(NEWS.get(name, [])) + 1})
+            send("240 posted\r\n")
+        elif command == "QUIT":
+            send("205 bye\r\n")
+            await writer.drain()
+            break
+        else:
+            send("500 unknown\r\n")
+        await writer.drain()
+    writer.close()
+
+
 async def main():
     imap = await asyncio.start_server(handle_imap, HOST, IMAP_PORT)
     smtp = await asyncio.start_server(handle_smtp, HOST, SMTP_PORT)
-    print(f"IMAP on {HOST}:{IMAP_PORT}, SMTP on {HOST}:{SMTP_PORT}")
-    async with imap, smtp:
-        await asyncio.gather(imap.serve_forever(), smtp.serve_forever())
+    pop3 = await asyncio.start_server(handle_pop3, HOST, POP3_PORT)
+    nntp = await asyncio.start_server(handle_nntp, HOST, NNTP_PORT)
+    print(f"IMAP {IMAP_PORT}, SMTP {SMTP_PORT}, POP3 {POP3_PORT}, NNTP {NNTP_PORT} on {HOST}")
+    async with imap, smtp, pop3, nntp:
+        await asyncio.gather(imap.serve_forever(), smtp.serve_forever(), pop3.serve_forever(), nntp.serve_forever())
 
 
 if __name__ == "__main__":

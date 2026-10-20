@@ -12,21 +12,28 @@ public struct SelectedMailbox: Sendable {
 
 public actor IMAPClient {
   private let server: ServerConfig
-  private let password: String
+  private let credential: Credential
+  private let timeout: TimeInterval
   private var connection: LineConnection?
   private var tagCounter = 0
   public private(set) var capabilities: Set<String> = []
   private var selectedPath: String?
 
-  public init(server: ServerConfig, password: String) {
+  public init(server: ServerConfig, credential: Credential, timeout: TimeInterval = 60) {
     self.server = server
-    self.password = password
+    self.credential = credential
+    self.timeout = timeout
+  }
+
+  public init(server: ServerConfig, password: String) {
+    self.init(server: server, credential: .password(password))
   }
 
   public var isConnected: Bool { connection != nil }
 
   public func connect() async throws {
-    let connection = LineConnection(host: server.host, port: server.port, implicitTLS: server.security == .tls)
+    let connection = LineConnection(
+      host: server.host, port: server.port, implicitTLS: server.security == .tls, timeout: timeout)
     self.connection = connection
     do {
       let greeting = IMAPResponse(raw: try await readResponse())
@@ -164,6 +171,24 @@ public actor IMAPClient {
   }
 
   private func authenticate() async throws {
+    if let token = credential.xoauth2(user: server.username) {
+      let connection = try requireConnection()
+      let tag = nextTag()
+      try await connection.write("\(tag) AUTHENTICATE XOAUTH2 \(token)\r\n")
+      while true {
+        let raw = try await readResponse()
+        if raw.first == UInt8(ascii: "+") {
+          try await connection.write("\r\n")
+          continue
+        }
+        if raw.starts(with: Data("\(tag) ".utf8)) {
+          let status = String(decoding: raw.dropFirst(tag.count + 1), as: UTF8.self)
+          guard status.uppercased().hasPrefix("OK") else { throw MailError.authenticationFailed(status) }
+          return
+        }
+      }
+    }
+    guard case .password(let password) = credential else { return }
     if capabilities.contains("AUTH=PLAIN") {
       let token = Data("\0\(server.username)\0\(password)".utf8).base64EncodedString()
       let connection = try requireConnection()
@@ -310,7 +335,7 @@ public actor IMAPClient {
   public func fetchSummaries(uids: [UInt32], in path: String) async throws -> [MessageSummary] {
     guard !uids.isEmpty else { return [] }
     try await ensureSelected(path)
-    let items = "UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY.PEEK[HEADER.FIELDS (CONTENT-TYPE)]"
+    let items = "UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY.PEEK[HEADER.FIELDS (CONTENT-TYPE REFERENCES)]"
     var summaries: [MessageSummary] = []
     for chunk in stride(from: 0, to: uids.count, by: 500).map({ Array(uids[$0..<min($0 + 500, uids.count)]) }) {
       let responses = try await command("UID FETCH \(Self.sequenceSet(chunk)) (\(items))")
@@ -373,6 +398,113 @@ public actor IMAPClient {
     try await command("NOOP")
   }
 
+  public func copy(uids: [UInt32], from source: String, to destination: String) async throws {
+    guard !uids.isEmpty else { return }
+    try await ensureSelected(source)
+    try await command("UID COPY \(Self.sequenceSet(uids)) \(Self.quote(destination))")
+  }
+
+  public func expungeAll(in path: String) async throws {
+    try await ensureSelected(path)
+    try await command("STORE 1:* +FLAGS.SILENT (\\Deleted)")
+    try await command("EXPUNGE")
+  }
+
+  public func create(_ path: String) async throws {
+    try await command("CREATE \(Self.quote(path))")
+    _ = try? await command("SUBSCRIBE \(Self.quote(path))")
+  }
+
+  public func rename(_ path: String, to newPath: String) async throws {
+    if selectedPath == path {
+      _ = try? await command("CLOSE")
+      selectedPath = nil
+    }
+    try await command("RENAME \(Self.quote(path)) \(Self.quote(newPath))")
+  }
+
+  public func delete(folder path: String) async throws {
+    if selectedPath == path {
+      _ = try? await command("CLOSE")
+      selectedPath = nil
+    }
+    try await command("DELETE \(Self.quote(path))")
+  }
+
+  /// Runs `UID SEARCH` with pre-built criteria; non-ASCII text is sent as a UTF-8 literal.
+  public func search(_ query: SearchQuery, in path: String) async throws -> [UInt32] {
+    try await ensureSelected(path)
+    var criteria: [String] = []
+    if query.unreadOnly { criteria.append("UNSEEN") }
+    if query.flaggedOnly { criteria.append("FLAGGED") }
+    if let since = query.since {
+      let formatter = DateFormatter()
+      formatter.locale = Locale(identifier: "en_US_POSIX")
+      formatter.dateFormat = "d-MMM-yyyy"
+      criteria.append("SINCE \(formatter.string(from: since))")
+    }
+    let text = query.text.trimmingCharacters(in: .whitespaces)
+    let responses: [IMAPResponse]
+    if text.isEmpty {
+      responses = try await command("UID SEARCH \(criteria.isEmpty ? "ALL" : criteria.joined(separator: " "))")
+    } else if text.allSatisfy({ $0.isASCII }) {
+      let quoted = Self.quote(text)
+      let textCriteria: String =
+        switch query.field {
+        case .all: "TEXT \(quoted)"
+        case .subject: "SUBJECT \(quoted)"
+        case .from: "FROM \(quoted)"
+        case .recipients: "OR OR TO \(quoted) CC \(quoted) BCC \(quoted)"
+        case .body: "BODY \(quoted)"
+        case .headers: "OR OR SUBJECT \(quoted) FROM \(quoted) TO \(quoted)"
+        }
+      responses = try await command("UID SEARCH \((criteria + [textCriteria]).joined(separator: " "))")
+    } else {
+      let key: String =
+        switch query.field {
+        case .all, .headers: "TEXT"
+        case .subject: "SUBJECT"
+        case .from: "FROM"
+        case .recipients: "TO"
+        case .body: "BODY"
+        }
+      let prefix = (["UID SEARCH CHARSET UTF-8"] + criteria + [key]).joined(separator: " ")
+      responses = try await commandWithLiteral(prefix, literal: Data(text.utf8))
+    }
+    return responses.filter { $0.keyword == "SEARCH" }.flatMap { response in
+      response.values.dropFirst(2).compactMap { $0.text.flatMap { UInt32($0) } }
+    }
+  }
+
+  public func searchHeader(_ name: String, value: String, in path: String) async throws -> [UInt32] {
+    try await ensureSelected(path)
+    let responses = try await command("UID SEARCH HEADER \(Self.quote(name)) \(Self.quote(value))")
+    return responses.filter { $0.keyword == "SEARCH" }.flatMap { response in
+      response.values.dropFirst(2).compactMap { $0.text.flatMap { UInt32($0) } }
+    }
+  }
+
+  /// Waits in IDLE until the selected mailbox changes. Returns false if IDLE isn't supported.
+  public func idleUntilChange(in path: String) async throws -> Bool {
+    guard capabilities.contains("IDLE") else { return false }
+    try await select(path)
+    let connection = try requireConnection()
+    let tag = nextTag()
+    try await connection.write("\(tag) IDLE\r\n")
+    while true {
+      let response = IMAPResponse(raw: try await readResponse())
+      if response.raw.first == UInt8(ascii: "+") { continue }
+      if response.line.hasPrefix(tag) {
+        return false
+      }
+      if ["EXISTS", "EXPUNGE", "FETCH", "RECENT"].contains(response.keyword ?? "") {
+        try await connection.write("DONE\r\n")
+        _ = try await collect(tag: tag)
+        return true
+      }
+    }
+  }
+
   // MARK: - Response decoding
 
   static func sequenceSet(_ uids: [UInt32]) -> String {
@@ -418,7 +550,9 @@ public actor IMAPClient {
     let date = field(0)?.text.flatMap(MailDate.parse)
       ?? attributes["INTERNALDATE"]?.text.flatMap(MailDate.parseInternalDate)
       ?? Date(timeIntervalSince1970: 0)
-    let contentType = attributes.first(where: { $0.key.hasPrefix("BODY[HEADER") })?.value.text?.lowercased() ?? ""
+    let headerBlock = attributes.first(where: { $0.key.hasPrefix("BODY[HEADER") })?.value.data ?? Data()
+    let headers = MIMEParser.parseHeaders(headerBlock + Data("\r\n\r\n".utf8))
+    let contentType = headers["Content-Type"]?.lowercased() ?? ""
     return MessageSummary(
       uid: uid,
       subject: field(1)?.text.map(MIMEDecoder.decodeEncodedWords) ?? "",
@@ -430,7 +564,8 @@ public actor IMAPClient {
       flags: flags(attributes["FLAGS"]),
       messageID: field(9)?.text,
       inReplyTo: field(8)?.text,
-      hasAttachment: contentType.contains("multipart/mixed")
+      hasAttachment: contentType.contains("multipart/mixed"),
+      references: MessageSummary.parseReferences(headers["References"])
     )
   }
 

@@ -58,6 +58,16 @@ actor LineConnection {
     return bytes
   }
 
+  /// Returns whatever bytes are buffered, or waits for the next chunk from the network.
+  func readChunk() async throws -> Data {
+    if buffer.isEmpty {
+      try await fill()
+    }
+    let chunk = buffer
+    buffer.removeAll()
+    return chunk
+  }
+
   func write(_ data: Data) async throws {
     try await task.write(data, timeout: timeout)
   }
