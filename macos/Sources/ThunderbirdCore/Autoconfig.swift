@@ -11,6 +11,7 @@ public struct DiscoveredConfig: Sendable, Hashable {
     case ispdb = "the Thunderbird ISP database"
     case mx = "your domain's mail server (MX) records"
     case protonBridge = "Proton Mail Bridge"
+    case probe = "the mail servers at your domain"
     case guess = "common server names"
   }
 
@@ -25,17 +26,56 @@ public struct DiscoveredConfig: Sendable, Hashable {
 
 /// Looks up server settings the same way Thunderbird's account hub does.
 public enum Autoconfig {
+  /// Tries, in order: the provider's own autoconfig, its well-known URL, the ISP database, the
+  /// same three keyed by the domain's MX host, then probing common server names.
   public static func discover(email: String) async -> DiscoveredConfig {
     let parts = email.split(separator: "@", maxSplits: 1)
     guard parts.count == 2 else { return guess(email: email, domain: "") }
     let domain = parts[1].lowercased()
     let encodedEmail = email.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? email
-    let candidates: [(DiscoveredConfig.Source, String)] = [
+    let direct: [(DiscoveredConfig.Source, String)] = [
       (.provider, "https://autoconfig.\(domain)/mail/config-v1.1.xml?emailaddress=\(encodedEmail)"),
       (.wellKnown, "https://\(domain)/.well-known/autoconfig/mail/config-v1.1.xml?emailaddress=\(encodedEmail)"),
       (.ispdb, "https://autoconfig.thunderbird.net/v1.1/\(domain)"),
     ]
+    if let config = await firstConfig(direct, email: email) {
+      return finalized(config, email: email)
+    }
 
+    let exchangers = await Task.detached { MXLookup.hosts(for: domain) }.value
+    if let exchanger = exchangers.first {
+      let base = baseDomain(exchanger)
+      if base != domain {
+        var lookupDomains: [String] = []
+        if let subdomain = nextSubDomain(exchanger, base: base), subdomain != base {
+          lookupDomains.append(subdomain)
+        }
+        lookupDomains.append(base)
+        let viaMX = lookupDomains.flatMap { lookup -> [(DiscoveredConfig.Source, String)] in
+          [
+            (.mx, "https://autoconfig.\(lookup)/mail/config-v1.1.xml?emailaddress=\(encodedEmail)"),
+            (.mx, "https://autoconfig.thunderbird.net/v1.1/\(lookup)"),
+          ]
+        }
+        if var config = await firstConfig(viaMX, email: email) {
+          config.providerName = config.providerName ?? base
+          return finalized(config, email: email)
+        }
+      }
+    }
+    if protonDomains.contains(domain)
+      || exchangers.contains(where: { host in protonDomains.contains { host == $0 || host.hasSuffix(".\($0)") } })
+    {
+      return protonBridge(email: email)
+    }
+    if let probed = await probe(email: email, domain: domain) {
+      return probed
+    }
+    return guess(email: email, domain: domain)
+  }
+
+  /// Fetches all candidates at once and returns the highest-priority one that succeeded.
+  private static func firstConfig(_ candidates: [(DiscoveredConfig.Source, String)], email: String) async -> DiscoveredConfig? {
     let results = await withTaskGroup(of: (Int, DiscoveredConfig?).self) { group in
       for (index, (source, url)) in candidates.enumerated() {
         group.addTask {
@@ -49,30 +89,60 @@ public enum Autoconfig {
       }
       return found
     }
-    for index in candidates.indices {
-      if var config = results[index] {
-        if ConnectionTrust.isLoopback(config.incoming.host) {
-          config.note = protonBridge(email: email).note
+    return candidates.indices.lazy.compactMap { results[$0] }.first
+  }
+
+  private static func finalized(_ config: DiscoveredConfig, email: String) -> DiscoveredConfig {
+    var config = config
+    if ConnectionTrust.isLoopback(config.incoming.host) {
+      config.note = protonBridge(email: email).note
+    }
+    return config
+  }
+
+  /// The host one label below the base domain, e.g. aspmx.l.google.com → l.google.com.
+  static func nextSubDomain(_ host: String, base: String) -> String? {
+    let labels = host.lowercased().split(separator: ".").map(String.init)
+    let baseCount = base.split(separator: ".").count
+    guard labels.count > baseCount else { return nil }
+    return labels.suffix(baseCount + 1).joined(separator: ".")
+  }
+
+  /// Like Thunderbird's GuessConfig: try common host names and ports, keeping only servers that answer.
+  static func probe(email: String, domain: String) async -> DiscoveredConfig? {
+    func candidates(_ prefixes: [String], _ secure: Int, _ startTLS: Int) -> [(String, Int, ConnectionSecurity)] {
+      prefixes.flatMap { prefix in [(prefix + domain, secure, .tls), (prefix + domain, startTLS, .startTLS)] }
+    }
+    async let incoming = firstAnswering(candidates(["imap.", "mail.", ""], 993, 143), greeting: "* OK")
+    async let outgoing = firstAnswering(candidates(["smtp.", "mail.", ""], 465, 587), greeting: "220")
+    guard let (inHost, inPort, inSecurity) = await incoming, let (outHost, outPort, outSecurity) = await outgoing else {
+      return nil
+    }
+    return DiscoveredConfig(
+      incoming: ServerConfig(host: inHost, port: inPort, security: inSecurity, username: email),
+      outgoing: ServerConfig(host: outHost, port: outPort, security: outSecurity, username: email),
+      providerName: nil, source: .probe, requiresOAuth: false)
+  }
+
+  private static func firstAnswering(
+    _ candidates: [(String, Int, ConnectionSecurity)], greeting: String
+  ) async -> (String, Int, ConnectionSecurity)? {
+    let answered = await withTaskGroup(of: (Int, Bool).self) { group in
+      for (index, (host, port, security)) in candidates.enumerated() {
+        group.addTask {
+          let connection = LineConnection(host: host, port: port, implicitTLS: security == .tls, timeout: 6)
+          let line = try? await connection.readLine()
+          await connection.close()
+          return (index, line.map { String(decoding: $0, as: UTF8.self).hasPrefix(greeting) } ?? false)
         }
-        return config
       }
-    }
-    if protonDomains.contains(domain) {
-      return protonBridge(email: email)
-    }
-    let exchangers = await Task.detached { MXLookup.hosts(for: domain) }.value
-    if exchangers.contains(where: { host in protonDomains.contains { host == $0 || host.hasSuffix(".\($0)") } }) {
-      return protonBridge(email: email)
-    }
-    for mxDomain in Set(exchangers.map(baseDomain)) where mxDomain != domain {
-      if let url = URL(string: "https://autoconfig.thunderbird.net/v1.1/\(mxDomain)"),
-        var config = await fetch(url, email: email, source: .mx)
-      {
-        config.providerName = config.providerName ?? mxDomain
-        return config
+      var result = Set<Int>()
+      for await (index, ok) in group where ok {
+        result.insert(index)
       }
+      return result
     }
-    return guess(email: email, domain: domain)
+    return answered.min().map { candidates[$0] }
   }
 
   static let protonDomains: Set<String> = ["protonmail.ch", "protonmail.com", "proton.me", "pm.me"]

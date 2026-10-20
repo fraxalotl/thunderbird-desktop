@@ -88,7 +88,7 @@ actor LineConnection {
     let data: Data?
     let atEOF: Bool
     do {
-      (data, atEOF) = try await task.readData(ofMinLength: 1, maxLength: 1 << 16, timeout: timeout)
+      (data, atEOF) = try await read()
     } catch {
       throw describe(error)
     }
@@ -133,10 +133,36 @@ actor LineConnection {
   }
 
   func write(_ data: Data) async throws {
+    let task = task
+    let timeout = timeout
     do {
-      try await task.write(data, timeout: timeout)
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        let once = OnceFlag()
+        task.write(data, timeout: timeout) { error in
+          guard once.claim() else { return }
+          if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+        }
+      }
     } catch {
       throw describe(error)
+    }
+  }
+
+  /// Wraps readData by hand: the stream task can call its completion handler a second time
+  /// when a failed connection is cancelled, which the SDK's async version turns into a crash.
+  private func read() async throws -> (Data?, Bool) {
+    let task = task
+    let timeout = timeout
+    return try await withCheckedThrowingContinuation { continuation in
+      let once = OnceFlag()
+      task.readData(ofMinLength: 1, maxLength: 1 << 16, timeout: timeout) { data, atEOF, error in
+        guard once.claim() else { return }
+        if let error {
+          continuation.resume(throwing: error)
+        } else {
+          continuation.resume(returning: (data, atEOF))
+        }
+      }
     }
   }
 

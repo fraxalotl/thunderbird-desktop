@@ -215,11 +215,25 @@ private func summary(
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["TB_NETWORK_TESTS"] == "1"))
 struct NetworkTests {
   @Test func looksUpMailExchangers() async {
-    let custom = await Autoconfig.discover(email: "someone@sulfur-mercury.com")
-    #expect(custom.source == .protonBridge)
     #expect(!MXLookup.hosts(for: "proton.me").isEmpty)
     #expect(Autoconfig.baseDomain("aspmx.l.google.com") == "google.com")
     #expect(Autoconfig.baseDomain("mx1.example.co.uk") == "example.co.uk")
+  }
+
+  @Test func findsProvidersThroughMXRecords() async {
+    let custom = await Autoconfig.discover(email: "someone@sulfur-mercury.com")
+    #expect(custom.source == .mx)
+    #expect(custom.incoming.host == "127.0.0.1")
+    #expect(custom.note != nil)
+    let workspace = await Autoconfig.discover(email: "someone@thunderbird.net")
+    #expect(workspace.incoming.host == "imap.gmail.com")
+    #expect(Autoconfig.nextSubDomain("aspmx.l.google.com", base: "google.com") == "l.google.com")
+  }
+
+  @Test func probesServersWhenNothingIsPublished() async throws {
+    let config = try #require(await Autoconfig.probe(email: "someone@gmail.com", domain: "gmail.com"))
+    #expect(config.incoming == ServerConfig(host: "imap.gmail.com", port: 993, security: .tls, username: "someone@gmail.com"))
+    #expect(config.outgoing.host == "smtp.gmail.com")
   }
 
   @Test func detectsProtonHostedDomains() async {
