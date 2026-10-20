@@ -315,6 +315,10 @@ public enum MailError: LocalizedError, Sendable {
   case invalidRecipients
   case unsupported(String)
   case needsSignIn(String)
+  case hostNotFound(String)
+  case cannotConnect(String, Int)
+  case tlsFailed(String)
+  case offline
 
   public var errorDescription: String? {
     switch self {
@@ -327,6 +331,11 @@ public enum MailError: LocalizedError, Sendable {
     case .invalidRecipients: "Add at least one valid recipient."
     case .unsupported(let what): "\(what) isn't supported for this account."
     case .needsSignIn(let host): "Sign in to \(host) again from Account Settings."
+    case .hostNotFound(let host): "Couldn't find the server “\(host)”. Check the server name."
+    case .cannotConnect(let host, let port):
+      "Couldn't connect to \(host) on port \(port). Check the port, or that the server (or Proton Mail Bridge) is running."
+    case .tlsFailed(let host): "Couldn't make a secure connection to \(host). Check the connection security setting."
+    case .offline: "You're offline."
     }
   }
 

@@ -210,3 +210,44 @@ private func summary(
     #expect(pgp.keys(for: "bob@example.com").isEmpty)
   }
 }
+
+/// Network-dependent checks; run with TB_NETWORK_TESTS=1.
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["TB_NETWORK_TESTS"] == "1"))
+struct NetworkTests {
+  @Test func looksUpMailExchangers() async {
+    let custom = await Autoconfig.discover(email: "someone@sulfur-mercury.com")
+    #expect(custom.source == .protonBridge)
+    #expect(!MXLookup.hosts(for: "proton.me").isEmpty)
+    #expect(Autoconfig.baseDomain("aspmx.l.google.com") == "google.com")
+    #expect(Autoconfig.baseDomain("mx1.example.co.uk") == "example.co.uk")
+  }
+
+  @Test func detectsProtonHostedDomains() async {
+    let config = await Autoconfig.discover(email: "someone@proton.me")
+    #expect(config.incoming.host == "127.0.0.1")
+    #expect(config.incoming.port == 1143)
+    #expect(config.note != nil)
+  }
+
+  @Test func reportsUnknownHosts() async {
+    let client = IMAPClient(
+      server: ServerConfig(host: "imap.does-not-exist.invalid", port: 993, security: .tls, username: "x"), password: "x")
+    await #expect(throws: MailError.self) { try await client.connect() }
+  }
+}
+
+/// Talks to a running Proton Mail Bridge; run with TB_PROTON_BRIDGE=1.
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["TB_PROTON_BRIDGE"] == "1"))
+struct ProtonBridgeTests {
+  @Test func upgradesToTLSWithBridgeCertificate() async throws {
+    let connection = LineConnection(host: "127.0.0.1", port: 1143, implicitTLS: false)
+    #expect(String(decoding: try await connection.readLine(), as: UTF8.self).hasPrefix("* OK"))
+    try await connection.write("A1 STARTTLS\r\n")
+    #expect(String(decoding: try await connection.readLine(), as: UTF8.self).hasPrefix("A1 OK"))
+    await connection.startTLS()
+    try await connection.write("A2 CAPABILITY\r\n")
+    let capabilities = String(decoding: try await connection.readLine(), as: UTF8.self)
+    #expect(capabilities.contains("AUTH=PLAIN"))
+    await connection.close()
+  }
+}

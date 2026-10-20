@@ -9,6 +9,8 @@ public struct DiscoveredConfig: Sendable, Hashable {
     case provider = "your email provider"
     case wellKnown = "your email provider's well-known address"
     case ispdb = "the Thunderbird ISP database"
+    case mx = "your domain's mail server (MX) records"
+    case protonBridge = "Proton Mail Bridge"
     case guess = "common server names"
   }
 
@@ -17,6 +19,8 @@ public struct DiscoveredConfig: Sendable, Hashable {
   public var providerName: String?
   public var source: Source
   public var requiresOAuth: Bool
+  /// Extra guidance for the user, such as which password to use.
+  public var note: String? = nil
 }
 
 /// Looks up server settings the same way Thunderbird's account hub does.
@@ -46,11 +50,53 @@ public enum Autoconfig {
       return found
     }
     for index in candidates.indices {
-      if let config = results[index] {
+      if var config = results[index] {
+        if ConnectionTrust.isLoopback(config.incoming.host) {
+          config.note = protonBridge(email: email).note
+        }
+        return config
+      }
+    }
+    if protonDomains.contains(domain) {
+      return protonBridge(email: email)
+    }
+    let exchangers = await Task.detached { MXLookup.hosts(for: domain) }.value
+    if exchangers.contains(where: { host in protonDomains.contains { host == $0 || host.hasSuffix(".\($0)") } }) {
+      return protonBridge(email: email)
+    }
+    for mxDomain in Set(exchangers.map(baseDomain)) where mxDomain != domain {
+      if let url = URL(string: "https://autoconfig.thunderbird.net/v1.1/\(mxDomain)"),
+        var config = await fetch(url, email: email, source: .mx)
+      {
+        config.providerName = config.providerName ?? mxDomain
         return config
       }
     }
     return guess(email: email, domain: domain)
+  }
+
+  static let protonDomains: Set<String> = ["protonmail.ch", "protonmail.com", "proton.me", "pm.me"]
+
+  /// Proton Mail is only reachable over IMAP/SMTP through the Proton Mail Bridge app.
+  static func protonBridge(email: String) -> DiscoveredConfig {
+    DiscoveredConfig(
+      incoming: ServerConfig(host: "127.0.0.1", port: 1143, security: .startTLS, username: email),
+      outgoing: ServerConfig(host: "127.0.0.1", port: 1025, security: .startTLS, username: email),
+      providerName: "Proton Mail",
+      source: .protonBridge,
+      requiresOAuth: false,
+      note:
+        "Proton Mail works through Proton Mail Bridge. Keep Bridge running, and use the password Bridge shows for this address, not your Proton password."
+    )
+  }
+
+  /// The registrable part of a host name, e.g. aspmx.l.google.com → google.com, mx.example.co.uk → example.co.uk.
+  static func baseDomain(_ host: String) -> String {
+    let labels = host.lowercased().split(separator: ".").map(String.init)
+    guard labels.count > 2 else { return labels.joined(separator: ".") }
+    let secondLevel = labels[labels.count - 2]
+    let take = labels.last!.count == 2 && ["co", "com", "net", "org", "ac", "gov", "ne", "or"].contains(secondLevel) ? 3 : 2
+    return labels.suffix(take).joined(separator: ".")
   }
 
   private static func fetch(_ url: URL, email: String, source: DiscoveredConfig.Source) async -> DiscoveredConfig? {

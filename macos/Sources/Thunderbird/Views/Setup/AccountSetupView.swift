@@ -90,7 +90,7 @@ private struct EmailSetup: View {
             .autocorrectionDisabled()
             .disabled(step != .details)
           if !usesOAuth {
-            SecureField("Password", text: $password)
+            SecureField(discovered?.source == .protonBridge ? "Bridge password" : "Password", text: $password)
           }
         }
 
@@ -151,6 +151,9 @@ private struct EmailSetup: View {
           systemImage: discovered.source == .guess ? "questionmark.circle" : "checkmark.seal.fill"
         )
         .foregroundStyle(discovered.source == .guess ? Color.orange : Color.green)
+        if let note = discovered.note {
+          Label(note, systemImage: "info.circle")
+        }
         if discovered.requiresOAuth, let provider = OAuth2Provider.forHost(incoming.host),
           OAuth2ClientRegistry.client(for: provider.issuer) == nil
         {
