@@ -87,16 +87,19 @@ struct MessageContextMenu: View {
     }
     .disabled(!isSingle)
 
-    if isSingle, !store.localTemplates.isEmpty {
-      Menu("Reply with Template") {
-        ForEach(store.localTemplates) { template in
-          Button(template.summary.subject.nilIfEmpty ?? "(no subject)") {
-            guard let loaded else { return }
-            Task { compose(await store.replyWithTemplate(template.reference, to: loaded)) }
-          }
+    Menu("Reply with Template") {
+      if store.localTemplates.isEmpty {
+        Button("No Templates in Local Folders") {}
+          .disabled(true)
+      }
+      ForEach(store.localTemplates) { template in
+        Button(template.summary.subject.nilIfEmpty ?? "(no subject)") {
+          guard let loaded else { return }
+          Task { compose(await store.replyWithTemplate(template.reference, to: loaded)) }
         }
       }
     }
+    .disabled(!isSingle)
 
     Menu("Forward and Redirect") {
       Button("Forward") { compose(store.forwardDraft(.preferred)) }

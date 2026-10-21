@@ -613,14 +613,12 @@ private struct RemoteContentBar: View {
         if let sender {
           Divider()
           Button("Allow Remote Content from \(sender.email)") { onAllow(sender.email) }
-          if let domain = sender.email.split(separator: "@").last {
+          if sender.email.contains("@"), let domain = sender.email.split(separator: "@").last {
             Button("Allow Remote Content from \(domain)") { onAllow(String(domain)) }
           }
         }
       } label: {
         Text("Options")
-      } primaryAction: {
-        onAllow(nil)
       }
       .menuStyle(.button)
       .buttonStyle(.glassProminent)
