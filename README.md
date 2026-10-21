@@ -1,4 +1,4 @@
-# Thunderbird
+# Zapdos
 
 This is a custom fork of Thunderbird.
 
@@ -8,9 +8,14 @@ It is provided as is with no guarantees.
 
 The original read me from the main repo is as follows:
 
+
+
+--------------
+
+
 Thunderbird is a powerful and customizable open source email client with many users. It is based on the same platform that Firefox uses.
 
-## Getting Started
+### Getting Started
 This README will try and give you the basics that you need to get started, more comprehensive documentation is available on the [Thunderbird Developer Website](https://developer.thunderbird.net).
 
 We also have documentation from this repository in a rendered version at [Thunderbird Source Tree Documentation](https://source-docs.thunderbird.net/en/latest/).
