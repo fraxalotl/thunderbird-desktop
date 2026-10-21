@@ -1,4 +1,13 @@
 # Thunderbird
+
+This is a custom fork of Thunderbird.
+
+The main goal is to add a right click 'Reply with Template' option to the context menu, and a seperate branch thats a native swift UI liquid Glass rewrite of the app for personal use.
+
+It is provided as is with no guarantees.
+
+The original read me from the main repo is as follows:
+
 Thunderbird is a powerful and customizable open source email client with many users. It is based on the same platform that Firefox uses.
 
 ## Getting Started
