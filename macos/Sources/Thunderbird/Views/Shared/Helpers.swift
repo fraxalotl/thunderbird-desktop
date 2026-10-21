@@ -41,6 +41,17 @@ enum AttachmentFiles {
 
   @MainActor
   static func save(_ attachments: [MessageAttachment]) {
+    if !Preferences.bool(Preferences.alwaysAskWhereToSave) {
+      let path = Preferences.string(Preferences.downloadFolder)
+      let folder =
+        path.isEmpty ? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0] : URL(fileURLWithPath: path)
+      for attachment in attachments {
+        let url = uniqueURL(in: folder, name: attachment.filename)
+        try? attachment.data.write(to: url)
+        recordSaved(url)
+      }
+      return
+    }
     if attachments.count == 1, let attachment = attachments.first {
       let panel = NSSavePanel()
       panel.nameFieldStringValue = attachment.filename
@@ -61,6 +72,18 @@ enum AttachmentFiles {
       try? attachment.data.write(to: url)
       recordSaved(url)
     }
+  }
+
+  private static func uniqueURL(in folder: URL, name: String) -> URL {
+    var url = folder.appending(path: name)
+    let base = url.deletingPathExtension().lastPathComponent
+    let ext = url.pathExtension
+    var index = 1
+    while FileManager.default.fileExists(atPath: url.path) {
+      url = folder.appending(path: ext.isEmpty ? "\(base) (\(index))" : "\(base) (\(index)).\(ext)")
+      index += 1
+    }
+    return url
   }
 
   static func symbol(for mimeType: String) -> String {

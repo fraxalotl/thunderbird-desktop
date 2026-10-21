@@ -45,6 +45,7 @@ enum FolderPanePreferences {
 
 struct FolderSidebar: View {
   @Environment(MailStore.self) private var store
+  @Environment(MailUIState.self) private var ui
   @Environment(\.openSettings) private var openSettings
   @Environment(\.openWindow) private var openWindow
   let onAddAccount: () -> Void
@@ -146,7 +147,11 @@ struct FolderSidebar: View {
             AccountHeader(
               account: account,
               onSubscribe: {
-                if account.kind == .nntp { subscribingAccount = account.id } else { subscribingIMAP = account.id }
+                switch account.kind {
+                case .nntp: subscribingAccount = account.id
+                case .feed: ui.present(.feedSubscriptions(account.id))
+                default: subscribingIMAP = account.id
+                }
               },
               onNewFolder: { onNewFolder(FolderSelection(accountID: account.id, path: "")) })
           }
@@ -395,7 +400,7 @@ private struct AccountHeader: View {
         Button("Subscribe to Newsgroups…", action: onSubscribe)
       } else {
         Button("New Folder…", action: onNewFolder)
-        if account.kind == .imap {
+        if account.kind == .imap || account.kind == .feed {
           Button("Subscribe…", action: onSubscribe)
         }
       }

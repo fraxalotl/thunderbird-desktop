@@ -74,6 +74,7 @@ final class ComposerController {
   @ObservationIgnored var store: MailStore?
   @ObservationIgnored var closeWindow: (() -> Void)?
   @ObservationIgnored private var editorReady = false
+  @ObservationIgnored private var autosaveTask: Task<Void, Never>?
 
   init(draft: ComposeDraft) {
     self.draft = draft
@@ -91,10 +92,36 @@ final class ComposerController {
     Task {
       let html = draft.htmlBody ?? "<p><br></p>"
       _ = try? await webView?.callAsyncJavaScript("tb.setHTML(html)", arguments: ["html": html], contentWorld: .page)
+      if draft.kind != .draft && draft.kind != .template {
+        _ = try? await webView?.callAsyncJavaScript(
+          "const s = document.body.style; if (font) s.fontFamily = font; s.fontSize = size + 'px'; s.color = color; s.backgroundColor = background;",
+          arguments: [
+            "font": Preferences.string(Preferences.composeFont), "size": max(9, Preferences.int(Preferences.composeFontSize)),
+            "color": Preferences.string(Preferences.composeTextColor), "background": Preferences.string(Preferences.composeBackground),
+          ], contentWorld: .page)
+      }
       if !(draft.to.isEmpty && draft.newsgroups.isEmpty) {
         _ = try? await webView?.callAsyncJavaScript("tb.focusStart()", contentWorld: .page)
       }
     }
+  }
+
+  /// Composition › Auto Save every N minutes.
+  func startAutosave() {
+    autosaveTask?.cancel()
+    let minutes = Preferences.int(Preferences.autosaveMinutes)
+    guard minutes > 0 else { return }
+    autosaveTask = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(minutes * 60))
+        guard let self, !Task.isCancelled, !self.sent else { return }
+        if self.isDirty { await self.saveDraft(silently: true) }
+      }
+    }
+  }
+
+  func stopAutosave() {
+    autosaveTask?.cancel()
   }
 
   func receive(_ message: [String: Any]) {
@@ -359,18 +386,66 @@ final class ComposerController {
   // MARK: - Sending
 
   private var mentionsAttachment: Bool {
-    let text = draft.isHTML ? draft.body : draft.body
-    let own = text.lowercased().components(separatedBy: "\n").filter { !$0.hasPrefix(">") }.joined(separator: "\n")
-    return ["attach", "attached", "attachment", "enclosed", "see the file"].contains { own.contains($0) }
+    let own = draft.body.lowercased().components(separatedBy: "\n").filter { !$0.hasPrefix(">") }.joined(separator: "\n")
+    let keywords = Preferences.string(Preferences.attachmentKeywords).lowercased().split(separator: ",")
+      .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    return keywords.contains { keyword in
+      own.range(of: "\\b\(NSRegularExpression.escapedPattern(for: keyword))\\b", options: .regularExpression) != nil
+    }
   }
 
-  func send(skipReminder: Bool = false) async {
+  private var misspelledWordCount: Int {
+    let checker = NSSpellChecker.shared
+    let text = draft.body.components(separatedBy: "\n").filter { !$0.hasPrefix(">") }.joined(separator: "\n")
+    var count = 0
+    var offset = 0
+    let length = (text as NSString).length
+    while offset < length {
+      let range = checker.checkSpelling(of: text, startingAt: offset)
+      guard range.location != NSNotFound, range.location >= offset else { break }
+      count += 1
+      offset = range.location + max(range.length, 1)
+    }
+    return count
+  }
+
+  func send(skipReminder: Bool = false, viaShortcut: Bool = false) async {
     guard let store else { return }
+    if viaShortcut && Preferences.bool(Preferences.confirmSendShortcut) {
+      let alert = NSAlert()
+      alert.messageText = "Are you sure you are ready to send this message?"
+      alert.addButton(withTitle: "Send")
+      alert.addButton(withTitle: "Cancel")
+      alert.showsSuppressionButton = true
+      alert.suppressionButton?.title = "Don't ask me again"
+      let response = alert.runModal()
+      if alert.suppressionButton?.state == .on { UserDefaults.standard.set(false, forKey: Preferences.confirmSendShortcut) }
+      guard response == .alertFirstButtonReturn else { return }
+    }
+    if let (account, _) = store.identity(for: draft), account.options.attachVCard,
+      !draft.attachments.contains(where: { $0.pathExtension.lowercased() == "vcf" })
+    {
+      attachVCard()
+    }
     let snapshot = await currentDraft()
     draft.body = snapshot.body
-    if !skipReminder && !remindLater && draft.attachments.isEmpty && mentionsAttachment {
+    if !skipReminder && !remindLater && Preferences.bool(Preferences.attachmentReminder) && draft.attachments.isEmpty
+      && mentionsAttachment
+    {
       confirmingNoAttachment = true
       return
+    }
+    if Preferences.bool(Preferences.spellcheckBeforeSend), misspelledWordCount > 0 {
+      let alert = NSAlert()
+      alert.messageText = "This message has \(misspelledWordCount) possible spelling mistakes."
+      alert.informativeText = "Check the spelling before sending?"
+      alert.addButton(withTitle: "Check Spelling")
+      alert.addButton(withTitle: "Send Anyway")
+      if alert.runModal() == .alertFirstButtonReturn {
+        webView?.window?.makeFirstResponder(webView)
+        NSApp.sendAction(#selector(NSText.showGuessPanel(_:)), to: nil, from: nil)
+        return
+      }
     }
     isBusy = true
     defer { isBusy = false }

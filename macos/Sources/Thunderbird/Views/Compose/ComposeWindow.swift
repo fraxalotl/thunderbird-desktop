@@ -99,20 +99,16 @@ struct ComposeWindow: View {
     .onAppear {
       controller.store = store
       controller.closeWindow = { dismissWindow() }
+      controller.startAutosave()
       if controller.draft.accountID == nil {
         controller.draft.accountID = store.sendingAccounts.first?.id
         controller.draft.identityID = controller.draft.accountID
       }
     }
     .onDisappear {
+      controller.stopAutosave()
       if controller.isDirty && !controller.sent {
         Task { await controller.saveDraft(silently: true) }
-      }
-    }
-    .task {
-      while !Task.isCancelled {
-        try? await Task.sleep(for: .seconds(300))
-        if controller.isDirty && !controller.sent { await controller.saveDraft(silently: true) }
       }
     }
     .onChange(of: controller.draft.to) { controller.isDirty = true }

@@ -31,6 +31,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     false
   }
 
+  /// Set by the app once the mail store exists, for the exit-time folder clean-up.
+  @MainActor var mailStore: MailStore?
+
+  @MainActor
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    guard let mailStore, mailStore.needsQuitCleanup else { return .terminateNow }
+    Task {
+      await withTaskGroup(of: Void.self) { group in
+        group.addTask { await mailStore.prepareForQuit() }
+        group.addTask { try? await Task.sleep(for: .seconds(15)) }
+        await group.next()
+        group.cancelAll()
+      }
+      sender.reply(toApplicationShouldTerminate: true)
+    }
+    return .terminateLater
+  }
+
   nonisolated func userNotificationCenter(
     _ center: UNUserNotificationCenter, willPresent notification: UNNotification
   ) async -> UNNotificationPresentationOptions {
@@ -52,6 +70,8 @@ struct ThunderbirdApp: App {
         .environments(mail, contacts, calendar, chat)
         .onAppear {
           mail.onAddressesUsed = { [contacts] in contacts.collect($0) }
+          mail.expandMailingList = { [contacts] in contacts.members(ofList: $0) }
+          appDelegate.mailStore = mail
         }
     }
     .defaultSize(width: 1320, height: 820)

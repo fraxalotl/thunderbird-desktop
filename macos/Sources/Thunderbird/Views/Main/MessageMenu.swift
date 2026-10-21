@@ -43,7 +43,7 @@ struct MessageMenuItems: View {
     Button("Reply to List") { compose(store.replyDraft(.list)) }
       .shortcut("l", [.command, .shift], inMenuBar)
       .disabled(!store.canReplyToList(loaded))
-    Button("Forward") { compose(store.forwardDraft(.inline)) }
+    Button("Forward") { compose(store.forwardDraft(.preferred)) }
       .shortcut("l", [.command], inMenuBar)
       .disabled(loaded == nil)
     Menu("Forward As") {
@@ -69,7 +69,7 @@ struct MessageMenuItems: View {
     Divider()
 
     Button("Open Message") {
-      for reference in store.selection { openWindow(id: WindowID.message, value: reference) }
+      for reference in store.selection { store.openMessageWindow(reference, using: openWindow) }
     }
     .shortcut("o", [.command], inMenuBar)
     .disabled(!hasSelection)
@@ -78,6 +78,17 @@ struct MessageMenuItems: View {
     }
     .shortcut("o", [.command, .shift], inMenuBar)
     .disabled(!hasSelection)
+
+    if loaded?.account.kind == .feed {
+      Menu("When Opening Feed Messages") {
+        Button("Open as Web Page") { UserDefaults.standard.set("webPage", forKey: MailPreferences.feedBodyMode) }
+        Button("Open as Summary") { UserDefaults.standard.set("summary", forKey: MailPreferences.feedBodyMode) }
+        Button("Toggle Web Page and Summary in Message Pane") {
+          let current = UserDefaults.standard.string(forKey: MailPreferences.feedBodyMode) ?? "summary"
+          UserDefaults.standard.set(current == "summary" ? "webPage" : "summary", forKey: MailPreferences.feedBodyMode)
+        }
+      }
+    }
 
     Divider()
 

@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+import CoreGraphics
 import Foundation
 import Observation
 import ThunderbirdCore
@@ -62,6 +63,29 @@ final class ChatStore {
     }
     for account in accounts where account.connectOnStartup {
       Task { await connect(account.id) }
+    }
+    watchIdle()
+  }
+
+  @ObservationIgnored private var autoAway = false
+
+  /// Chat › "Change my status to Away after N minutes of inactivity".
+  private func watchIdle() {
+    Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(30))
+        guard let self else { return }
+        let minutes = Preferences.int(Preferences.chatAwayMinutes)
+        guard minutes > 0, !self.connections.isEmpty else { continue }
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        if idle >= Double(minutes * 60), !self.isAway {
+          self.autoAway = true
+          self.setAway(true)
+        } else if idle < 30, self.autoAway {
+          self.autoAway = false
+          self.setAway(false)
+        }
+      }
     }
   }
 
@@ -168,7 +192,7 @@ final class ChatStore {
         unread[key, default: 0] += 1
         let isMention = ownNames[accountID].map { message.text.localizedCaseInsensitiveContains($0) } ?? false
         let isDirect = conversation(key).map { !$0.isGroup } ?? false
-        if isMention || isDirect {
+        if (isMention || isDirect) && Preferences.bool(Preferences.chatNotifications) {
           notify(message, in: conversation(key)?.title ?? message.conversationID)
         }
       }

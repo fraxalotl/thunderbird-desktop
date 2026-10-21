@@ -80,6 +80,8 @@ enum MailPreferences {
   static let bodyMode = "bodyMode"
   static let attachmentsInline = "attachmentsInline"
   static let messageZoom = "messageZoom"
+  /// "summary" or "webPage", for View › Feed Message Body As.
+  static let feedBodyMode = "feedBodyMode"
 }
 
 /// Sheets and transient UI for the mail space, shared with the menu bar through a focused value.
@@ -88,6 +90,8 @@ enum MailPreferences {
 final class MailUIState {
   enum Sheet: Identifiable {
     case accountSetup
+    case setup(AccountSetupView.Mode)
+    case feedSubscriptions(UUID)
     case search
     case source(Data)
     case newFolder(FolderSelection)
@@ -106,6 +110,8 @@ final class MailUIState {
     var id: String {
       switch self {
       case .accountSetup: "accountSetup"
+      case .setup(let mode): "setup\(mode.rawValue)"
+      case .feedSubscriptions(let id): "feeds\(id.uuidString)"
       case .search: "search"
       case .source: "source"
       case .newFolder(let folder): "newFolder\(folder.id)"

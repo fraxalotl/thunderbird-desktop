@@ -71,8 +71,9 @@ public struct POP3Client: Sendable {
   }
 
   /// Downloads messages whose UIDL isn't in `seen`, optionally deleting them from the server.
+  /// Already seen messages listed in `expire` are deleted from the server too.
   public func download(
-    skipping seen: Set<String>, deleteFromServer: Bool, deliver: (Data) async -> Void
+    skipping seen: Set<String>, deleteFromServer: Bool, expire: Set<String> = [], deliver: (Data) async -> Void
   ) async throws -> Set<String> {
     let connection = try await open()
     defer { Task { await connection.close() } }
@@ -85,7 +86,7 @@ public struct POP3Client: Sendable {
       let uidl = String(parts[1])
       current.insert(uidl)
       guard !seen.contains(uidl) else {
-        if deleteFromServer { try await command("DELE \(parts[0])", connection) }
+        if deleteFromServer || expire.contains(uidl) { try await command("DELE \(parts[0])", connection) }
         continue
       }
       try await command("RETR \(parts[0])", connection)
@@ -107,6 +108,7 @@ public actor POP3Backend: MailBackend {
     canMoveAndDelete: true, canManageFolders: true, canAppend: true, canSearchServer: false)
   public let local: LocalBackend
   private var stateURL: URL { LocalBackend.storageRoot(for: accountID).appending(path: "pop3-seen.json") }
+  private var datesURL: URL { LocalBackend.storageRoot(for: accountID).appending(path: "pop3-dates.json") }
 
   public init(account: MailAccount) {
     self.account = account
@@ -126,11 +128,24 @@ public actor POP3Backend: MailBackend {
       let credential = try await Credentials.resolve(account.incoming, key: account.incomingKeychainKey)
       let client = POP3Client(server: account.incoming, credential: credential)
       let local = local
-      let current = try await client.download(skipping: seen, deleteFromServer: !account.leaveMessagesOnServer) { data in
+      var firstSeen = (try? JSONDecoder().decode([String: Date].self, from: Data(contentsOf: datesURL))) ?? [:]
+      var expire = Set<String>()
+      if account.leaveMessagesOnServer, let days = account.options.popLeaveDays, days > 0 {
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        expire = Set(firstSeen.filter { $0.value < cutoff }.keys)
+      }
+      let current = try await client.download(
+        skipping: seen, deleteFromServer: !account.leaveMessagesOnServer, expire: expire
+      ) { data in
         newMessages.append(await local.deliver(data, to: "Inbox", flags: []))
       }
-      let remembered = account.leaveMessagesOnServer ? current : seen.union(current)
+      let remaining = current.subtracting(expire)
+      let remembered = account.leaveMessagesOnServer ? remaining : seen.union(current)
       try? JSONEncoder().encode(remembered).write(to: stateURL, options: .atomic)
+      let now = Date()
+      firstSeen = firstSeen.filter { remaining.contains($0.key) }
+      for uidl in remaining where firstSeen[uidl] == nil { firstSeen[uidl] = now }
+      try? JSONEncoder().encode(firstSeen).write(to: datesURL, options: .atomic)
     }
     var result = try await local.sync(path: path, limit: limit)
     result.newMessages = newMessages

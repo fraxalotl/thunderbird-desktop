@@ -308,6 +308,9 @@ final class ContactsStore {
         }
       }
     }
+    for group in groups where group.name.lowercased().contains(query) {
+      results.insert(MailAddress(name: group.name, email: group.name), at: min(results.count, 0))
+    }
     for entry in collected.sorted(by: { $0.timesUsed > $1.timesUsed })
     where entry.address.email.lowercased().contains(query) || (entry.address.name?.lowercased().contains(query) ?? false) {
       if seen.insert(entry.id).inserted { results.append(entry.address) }
@@ -317,7 +320,10 @@ final class ContactsStore {
 
   /// Members of a contact group (mailing list) by name, for Expand List.
   func members(ofList name: String) -> [MailAddress] {
-    let listName = name.hasPrefix("list:") ? String(name.dropFirst(5)) : name
+    var listName = name.hasPrefix("list:") ? String(name.dropFirst(5)) : name
+    if let parsed = MailAddress.parseList(listName).first, !parsed.email.contains("@") {
+      listName = parsed.email
+    }
     guard isAuthorized, let group = groups.first(where: { $0.name.caseInsensitiveCompare(listName) == .orderedSame }) else { return [] }
     let request = CNContactFetchRequest(keysToFetch: Self.keys)
     request.predicate = CNContact.predicateForContactsInGroup(withIdentifier: group.identifier)

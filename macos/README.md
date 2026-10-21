@@ -76,6 +76,25 @@ available.
 **Chat.** IRC (with SASL), Matrix (login, sync, rooms, invitations) and XMPP (STARTTLS, roster,
 group chats), with conversation logs and notifications for mentions and direct messages.
 
+**Settings.** Settings mirrors Thunderbird's preferences and Account Settings.
+- General: Start Page, check interval, alerts and sound, mark-as-read delay, opening messages in a
+  new or existing window, closing the window on move or delete, display names for known
+  contacts, and the downloads folder.
+- Composition: default forward mode, autosave interval, a confirmation before sending with the
+  keyboard shortcut, attachment reminder keywords, default HTML font, size and colours,
+  collected addresses, and a spelling check before sending.
+- Privacy & Security: remote content with per-sender and per-domain exceptions, junk handling,
+  scam detection and saved passwords.
+- Chat: notifications and the automatic Away status.
+- Calendar: first day of the week, week numbers, working hours, default event length and
+  default reminder.
+- Each account has Server Settings (startup and interval checks, push, delete model, expunge
+  and empty Trash on exit, how long POP keeps mail on the server), Copies & Folders (Sent, Bcc,
+  Archives with yearly or monthly folders, Drafts, Templates), Composition & Addressing (quoting,
+  signature placement and file, vCard, Organization, return receipts by default), Junk
+  Settings (SpamAssassin headers, purging), Synchronization & Storage (offline copies,
+  retention) and Return Receipts (never, always or ask).
+
 ## Layout
 
 - `Sources/ThunderbirdCore`: no UI code.

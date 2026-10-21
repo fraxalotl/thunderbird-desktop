@@ -33,7 +33,7 @@ public struct OAuth2Provider: Sendable, Hashable, Identifiable {
       authorizationEndpoint: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
       tokenEndpoint: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
       scope:
-        "https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/POP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access",
+        "https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/POP.AccessAsUser.All https://outlook.office.com/SMTP.Send https://outlook.office.com/EWS.AccessAsUser.All offline_access",
       hostSuffixes: ["office365.com", "outlook.com", "hotmail.com"], redirectHost: "localhost"),
     OAuth2Provider(
       issuer: "www.fastmail.com", name: "Fastmail",

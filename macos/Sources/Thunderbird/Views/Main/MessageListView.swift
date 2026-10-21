@@ -168,7 +168,7 @@ struct MessageListView: View {
         return
       }
     }
-    openWindow(id: WindowID.message, value: reference)
+    store.openMessageWindow(reference, using: openWindow)
   }
 
   /// Thunderbird's single-key shortcuts for the message list (mainKeySet.inc.xhtml).

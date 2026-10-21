@@ -139,7 +139,7 @@ final class CalendarStore {
 
   /// The date range the current view mode shows.
   var visibleRange: DateInterval {
-    let calendar = Calendar.current
+    let calendar = Preferences.calendar
     switch mode {
     case .day:
       let start = calendar.startOfDay(for: focusDate)
@@ -190,7 +190,7 @@ final class CalendarStore {
       case .multiweek: .weekOfYear
       case .month: .month
       }
-    focusDate = Calendar.current.date(byAdding: component, value: direction, to: focusDate) ?? focusDate
+    focusDate = Preferences.calendar.date(byAdding: component, value: direction, to: focusDate) ?? focusDate
   }
 
   // MARK: - Events
@@ -209,9 +209,10 @@ final class CalendarStore {
     let start = rounded < defaultStart ? calendar.date(byAdding: .hour, value: 1, to: rounded)! : rounded
     return EventDraft(
       id: "", title: "", location: "", notes: "", url: "", isAllDay: false, start: start,
-      end: start.addingTimeInterval(3600),
+      end: start.addingTimeInterval(Double(max(5, Preferences.int(Preferences.defaultEventMinutes)) * 60)),
       calendarID: (store.defaultCalendarForNewEvents ?? writableCalendars.first)?.calendarIdentifier ?? "",
-      repeatRule: "none", alertMinutes: 15)
+      repeatRule: "none",
+      alertMinutes: Preferences.int(Preferences.defaultReminderMinutes) < 0 ? nil : Preferences.int(Preferences.defaultReminderMinutes))
   }
 
   private static func repeatName(_ rule: EKRecurrenceRule?) -> String {

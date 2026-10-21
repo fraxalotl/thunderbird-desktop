@@ -197,6 +197,12 @@ public actor JunkClassifier {
     return result
   }
 
+  /// Privacy & Security › Reset Training Data.
+  public func reset() {
+    model = Model()
+    try? FileManager.default.removeItem(at: url)
+  }
+
   public func train(subject: String, from: String, body: String, isJunk: Bool) {
     for token in Self.tokens(subject: subject, from: from, body: body) {
       if isJunk {

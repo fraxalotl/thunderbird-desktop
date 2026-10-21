@@ -34,6 +34,7 @@ struct MainMenus: Commands {
   @AppStorage(MailPreferences.headerMode) private var headerMode = HeaderMode.normal
   @AppStorage(MailPreferences.bodyMode) private var bodyMode = BodyMode.original
   @AppStorage(MailPreferences.attachmentsInline) private var attachmentsInline = true
+  @AppStorage(MailPreferences.feedBodyMode) private var feedBodyMode = "summary"
   @AppStorage(MailPreferences.listStyle) private var listStyle = ListStyle.cards
   @AppStorage(FolderPanePreferences.modes) private var folderModes = "all"
   @AppStorage(FolderPanePreferences.compact) private var folderCompact = false
@@ -364,6 +365,13 @@ struct MainMenus: Commands {
         Menu("Message Body As") {
           Picker("Body", selection: $bodyMode) {
             ForEach(BodyMode.allCases, id: \.self) { Text($0.title).tag($0) }
+          }
+          .pickerStyle(.inline)
+        }
+        Menu("Feed Message Body As") {
+          Picker("Feed", selection: $feedBodyMode) {
+            Text("Web Page").tag("webPage")
+            Text("Summary").tag("summary")
           }
           .pickerStyle(.inline)
         }

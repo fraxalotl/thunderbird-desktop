@@ -244,7 +244,10 @@ struct ComposeSaveMenu: View {
       Button("Template") { Task { await composer.saveTemplate() } }
     }
     Divider()
-    Button("Send") { Task { await composer.send() } }
+    Button("Send") {
+      let viaShortcut = NSApp.currentEvent?.type == .keyDown
+      Task { await composer.send(viaShortcut: viaShortcut) }
+    }
       .keyboardShortcut(.return, modifiers: .command)
     Button("Send Later") { Task { await composer.sendLater() } }
       .keyboardShortcut(.return, modifiers: [.command, .shift])

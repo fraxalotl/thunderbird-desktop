@@ -12,6 +12,9 @@ enum ReplyKind {
 
 enum ForwardKind {
   case inline, attachment
+
+  /// Composition › Forward messages.
+  static var preferred: ForwardKind { Preferences.bool(Preferences.forwardAsAttachment) ? .attachment : .inline }
 }
 
 enum OfflineDownload {

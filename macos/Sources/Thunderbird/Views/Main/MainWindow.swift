@@ -168,6 +168,21 @@ struct MailSpace: View {
     .sheet(item: $ui.sheet) { sheet in
       sheetView(sheet)
     }
+    .onChange(of: store.pendingFeedSetup, initial: true) {
+      if store.pendingFeedSetup {
+        ui.present(.setup(.feeds))
+        store.pendingFeedSetup = false
+      }
+    }
+    .onChange(of: store.pendingFeedSubscriptions) { _, id in
+      if let id {
+        Task {
+          try? await Task.sleep(for: .milliseconds(400))
+          ui.present(.feedSubscriptions(id))
+          store.pendingFeedSubscriptions = nil
+        }
+      }
+    }
   }
 
   private func updateColumns() {
@@ -224,6 +239,8 @@ struct MailSpace: View {
   private func sheetView(_ sheet: MailUIState.Sheet) -> some View {
     switch sheet {
     case .accountSetup: AccountSetupView()
+    case .setup(let mode): AccountSetupView(mode: mode)
+    case .feedSubscriptions(let accountID): FeedSubscriptionsView(accountID: accountID)
     case .search: SearchView()
     case .source(let data): MessageSourceView(data: data)
     case .newFolder(let parent): NewFolderSheet(parent: parent)
@@ -294,7 +311,7 @@ struct MailSpace: View {
     }
     .defaultCustomization(.hidden)
     ToolbarItem(id: "forward-inline", placement: .primaryAction) {
-      Button { compose(store.forwardDraft(.inline)) } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
+      Button { compose(store.forwardDraft(.preferred)) } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
         .help("Forward this message")
         .disabled(store.loadedMessage == nil)
     }

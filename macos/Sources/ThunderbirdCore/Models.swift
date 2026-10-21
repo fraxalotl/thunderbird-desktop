@@ -128,6 +128,8 @@ public struct RemoteFolder: Codable, Sendable, Hashable, Identifiable {
   public var role: FolderRole
   public var unseen: Int?
   public var total: Int?
+  /// A display name that differs from the path, for stores whose folders are identified by ID.
+  public var name: String?
 
   public var id: String { path }
 
@@ -149,7 +151,8 @@ public struct RemoteFolder: Codable, Sendable, Hashable, Identifiable {
   }
 
   public var displayName: String {
-    role == .inbox ? "Inbox" : (components.last ?? path)
+    if let name { return name }
+    return role == .inbox ? "Inbox" : (components.last ?? path)
   }
 
   static func detectRole(path: String, delimiter: String?, attributes: Set<String>) -> FolderRole {
@@ -316,6 +319,7 @@ public enum MessageFlag {
   public static let forwarded = "$Forwarded"
   public static let junk = "$Junk"
   public static let notJunk = "$NotJunk"
+  public static let mdnSent = "$MDNSent"
 
   /// IMAP system flags are case-insensitive; normalise them so set lookups work.
   static func normalize(_ flag: String) -> String {

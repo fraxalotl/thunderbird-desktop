@@ -277,6 +277,15 @@ public actor IMAPBackend: MailBackend {
 public enum MailSender {
   public static func send(_ message: OutgoingMessage, account: MailAccount, requestDSN: Bool = false) async throws -> Data {
     let messageID = OutgoingMessage.makeMessageID(domainOf: message.from.email.isEmpty ? account.email : message.from.email)
+    if account.kind == .ews {
+      guard let endpoint = URL(string: account.ewsURL) else { throw MailError.server("The Exchange server address is invalid.") }
+      var withBcc = message
+      withBcc.includeBccHeader = true
+      let data = try withBcc.render(messageID: messageID)
+      let credential = try await Credentials.resolve(account.incoming, key: account.incomingKeychainKey)
+      try await EWSClient(endpoint: endpoint, username: account.incoming.username, credential: credential).send(data)
+      return try message.render(messageID: messageID)
+    }
     let data = try message.render(messageID: messageID)
     if account.kind == .nntp {
       let credential = try? await Credentials.resolve(account.incoming, key: account.incomingKeychainKey)
@@ -294,5 +303,19 @@ public enum MailSender {
       throw MailError.unsupported("Posting to newsgroups from a mail account")
     }
     return data
+  }
+
+  /// Sends an already rendered message over the account's SMTP server.
+  public static func sendRaw(_ data: Data, from: String, to recipients: [String], account: MailAccount) async throws {
+    if account.kind == .ews {
+      guard let endpoint = URL(string: account.ewsURL) else { throw MailError.server("The Exchange server address is invalid.") }
+      let credential = try await Credentials.resolve(account.incoming, key: account.incomingKeychainKey)
+      try await EWSClient(endpoint: endpoint, username: account.incoming.username, credential: credential).send(data)
+      return
+    }
+    let credential: Credential? =
+      account.outgoing.username.isEmpty
+      ? nil : try await Credentials.resolve(account.outgoing, key: account.outgoingKeychainKey)
+    try await SMTPClient(server: account.outgoing, credential: credential).send(data, from: from, to: recipients)
   }
 }

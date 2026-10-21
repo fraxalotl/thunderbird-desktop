@@ -62,11 +62,13 @@ enum SendFormat: String, Codable, CaseIterable {
 extension ComposeDraft {
   static func new(account: MailAccount?, to: String = "") -> ComposeDraft {
     var draft = ComposeDraft(accountID: account?.id, identityID: account?.id, to: to)
-    draft.isHTML = account?.composeHTML ?? true
+    draft.isHTML = account?.composeHTML ?? Preferences.bool(Preferences.defaultHTML)
     draft.encrypt = account?.encryptByDefault ?? false
     draft.sign = account?.signByDefault ?? false
-    draft.body = signatureBlock(account?.signature)
-    draft.htmlBody = draft.isHTML ? "<p><br></p>" + htmlSignature(account?.signature) : nil
+    draft.requestReturnReceipt = account?.options.requestReceiptByDefault ?? false
+    let signature = account.map(signatureText)
+    draft.body = signatureBlock(signature)
+    draft.htmlBody = draft.isHTML ? "<p><br></p>" + htmlSignature(signature) : nil
     if account?.kind == .nntp {
       draft.isHTML = false
       draft.htmlBody = nil
@@ -113,12 +115,30 @@ extension ComposeDraft {
       .components(separatedBy: .newlines)
       .map { $0.hasPrefix(">") ? ">\($0)" : "> \($0)" }
       .joined(separator: "\n")
-    draft.body = "\n\n\(attribution)\n\(quoted)\n" + signatureBlock(account.signature)
+    let options = account.options
+    let signature = options.signatureInReplies ? signatureText(account) : nil
+    let signatureAbove = options.replyAboveQuote && !options.signatureBelowQuote
+    guard options.quoteOnReply else {
+      draft.body = signatureBlock(signature)
+      draft.htmlBody = draft.isHTML ? "<p><br></p>" + htmlSignature(signature) : nil
+      return draft
+    }
+    let plainQuote = "\(attribution)\n\(quoted)\n"
+    if options.replyAboveQuote {
+      draft.body = signatureAbove ? "\n\n" + signatureBlock(signature) + "\n\n" + plainQuote : "\n\n" + plainQuote + signatureBlock(signature)
+    } else {
+      draft.body = plainQuote + "\n\n" + signatureBlock(signature)
+    }
     if draft.isHTML {
       let original = message.htmlBody.map(sanitizedQuote) ?? "<pre>\(escape(message.plainText))</pre>"
-      draft.htmlBody =
-        "<p><br></p><p>\(escape(attribution))</p><blockquote type=\"cite\">\(original)</blockquote>"
-        + htmlSignature(account.signature)
+      let quote = "<p>\(escape(attribution))</p><blockquote type=\"cite\">\(original)</blockquote>"
+      if options.replyAboveQuote {
+        draft.htmlBody =
+          signatureAbove
+          ? "<p><br></p>" + htmlSignature(signature) + quote : "<p><br></p>" + quote + htmlSignature(signature)
+      } else {
+        draft.htmlBody = quote + "<p><br></p>" + htmlSignature(signature)
+      }
     }
     return draft
   }
@@ -137,14 +157,26 @@ extension ComposeDraft {
     }
     header.append("From: \(message.from.map(\.formatted).joined(separator: ", "))")
     header.append("To: \(message.to.map(\.formatted).joined(separator: ", "))")
-    draft.body = "\n\n" + header.joined(separator: "\n") + "\n\n" + message.plainText + "\n" + signatureBlock(account.signature)
+    draft.body = "\n\n" + header.joined(separator: "\n") + "\n\n" + message.plainText + "\n" + signatureBlock(signatureText(account))
     if draft.isHTML {
       let original = message.htmlBody.map(sanitizedQuote) ?? "<pre>\(escape(message.plainText))</pre>"
       draft.htmlBody =
         "<p><br></p><div>" + header.map(escape).joined(separator: "<br>") + "</div><br>" + original
-        + htmlSignature(account.signature)
+        + htmlSignature(signatureText(account))
     }
     return draft
+  }
+
+  /// The account's signature, read from the signature file when one is set.
+  static func signatureText(_ account: MailAccount) -> String {
+    let path = account.options.signatureFile ?? ""
+    if !path.isEmpty, let text = try? String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8) {
+      if path.lowercased().hasSuffix(".html") || path.lowercased().hasSuffix(".htm") {
+        return text.replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
+      }
+      return text
+    }
+    return account.signature
   }
 
   /// Reopens a saved draft or a template.

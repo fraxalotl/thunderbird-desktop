@@ -57,7 +57,11 @@ struct MessageReaderView: View {
   var body: some View {
     switch store.reader {
     case .empty:
-      MailStartPage()
+      if Preferences.bool(Preferences.showStartPage) {
+        MailStartPage()
+      } else {
+        ContentUnavailableView("No Message Selected", systemImage: "envelope")
+      }
     case .multiple(let count):
       ContentUnavailableView(
         "\(count) Messages Selected", systemImage: "envelope.stack",
@@ -76,10 +80,13 @@ struct MessageReaderView: View {
 
 struct MessageWindow: View {
   @Environment(MailStore.self) private var store
+  @Environment(\.dismissWindow) private var dismissWindow
   let reference: MessageReference
+  @State private var current: MessageReference?
   @State private var loaded: LoadedMessage?
   @State private var error: String?
   @State private var reader = ReaderController()
+  @State private var windowID = UUID()
 
   var body: some View {
     Group {
@@ -94,6 +101,21 @@ struct MessageWindow: View {
     .environment(reader)
     .navigationTitle(loaded?.parsed.subject.nilIfEmpty ?? "Message")
     .toolbar {
+      ToolbarItemGroup {
+        Button {
+          Task { await moveOrDelete(archive: true) }
+        } label: {
+          Label("Archive", systemImage: "archivebox")
+        }
+        .disabled(loaded == nil)
+        Button {
+          Task { await moveOrDelete(archive: false) }
+        } label: {
+          Label("Delete", systemImage: "trash")
+        }
+        .disabled(loaded == nil)
+      }
+      ToolbarSpacer(.fixed)
       ToolbarItem {
         Button {
           reader.print()
@@ -103,15 +125,54 @@ struct MessageWindow: View {
         .disabled(loaded == nil)
       }
     }
-    .task {
+    .task(id: current ?? reference) {
+      let target = current ?? reference
+      loaded = nil
+      error = nil
       do {
-        loaded = try await store.loadMessage(reference)
+        loaded = try await store.loadMessage(target)
         if loaded?.summary.isRead == false {
-          await store.setFlag(MessageFlag.seen, on: true, references: [reference])
+          await store.setFlag(MessageFlag.seen, on: true, references: [target])
         }
       } catch {
         self.error = error.localizedDescription
       }
+    }
+    .onAppear { store.openMessageWindows.append(windowID) }
+    .onDisappear { store.openMessageWindows.removeAll { $0 == windowID } }
+    .onChange(of: store.messageWindowRequest) {
+      guard let request = store.messageWindowRequest, store.openMessageWindows.last == windowID else { return }
+      current = request
+      store.messageWindowRequest = nil
+    }
+  }
+
+  /// Deleting or archiving from a message window shows the next message, or closes the window when
+  /// "Close message window on move or delete" is set.
+  private func moveOrDelete(archive: Bool) async {
+    let target = current ?? reference
+    let index = store.items.firstIndex { $0.reference == target }
+    let next = index.flatMap { store.items.indices.contains($0 + 1) ? store.items[$0 + 1].reference : nil }
+    if archive {
+      await store.move([target], to: .archive)
+    } else {
+      await store.delete([target])
+    }
+    if Preferences.bool(Preferences.closeOnMoveDelete) || next == nil {
+      dismissWindow()
+    } else {
+      current = next
+    }
+  }
+}
+
+extension MailStore {
+  /// Opens a message in its own window, reusing the newest one when the preference asks for that.
+  func openMessageWindow(_ reference: MessageReference, using openWindow: OpenWindowAction) {
+    if Preferences.bool(Preferences.openInExistingWindow), !openMessageWindows.isEmpty {
+      messageWindowRequest = reference
+    } else {
+      openWindow(id: WindowID.message, value: reference)
     }
   }
 }
@@ -123,8 +184,14 @@ struct LoadedMessageView: View {
   @Environment(\.openWindow) private var openWindow
   @AppStorage(MailPreferences.bodyMode) private var bodyMode = BodyMode.original
   @AppStorage(MailPreferences.attachmentsInline) private var attachmentsInline = true
+  @AppStorage(MailPreferences.feedBodyMode) private var feedBodyMode = "summary"
   let message: LoadedMessage
   let isStandalone: Bool
+
+  private var feedPage: URL? {
+    guard message.account.kind == .feed, feedBodyMode == "webPage" else { return nil }
+    return message.parsed.headers["Content-Base"].flatMap { URL(string: $0.trimmingCharacters(in: .whitespaces)) }
+  }
 
   private var invitations: [CalendarInvitation] {
     message.parsed.attachments
@@ -133,7 +200,8 @@ struct LoadedMessageView: View {
   }
 
   var body: some View {
-    let allowRemote = store.allowsRemoteContent(message.reference)
+    let sender = message.parsed.from.first
+    let allowRemote = store.allowsRemoteContent(message.reference, sender: sender)
     let rendered = MessageHTML.render(
       message.parsed, allowRemote: allowRemote, mode: bodyMode, inlineAttachments: attachmentsInline)
     VStack(spacing: 12) {
@@ -147,21 +215,49 @@ struct LoadedMessageView: View {
         SecurityBar(status: security)
       }
 
+      if Preferences.bool(Preferences.scamDetection), message.account.kind != .feed,
+        let reason = message.parsed.htmlBody.flatMap(ScamDetector.suspiciousReason(inHTML:))
+      {
+        NoticeBar(
+          symbol: "exclamationmark.triangle.fill", tint: .red,
+          text: "This message may be a scam. \(reason)")
+      }
+
+      if let pending = store.pendingReceipt, pending.reference == message.reference {
+        NoticeBar(
+          symbol: "envelope.badge", tint: .blue,
+          text: "The sender of this message has asked to be notified when you read this message."
+        ) {
+          Button("Ignore Request") { Task { await store.ignoreReturnReceipt(pending) } }
+            .buttonStyle(.glass)
+          Button("Send Receipt") { Task { await store.sendReturnReceipt(pending) } }
+            .buttonStyle(.glassProminent)
+        }
+      }
+
       ForEach(invitations, id: \.uid) { invitation in
         InvitationCard(invitation: invitation, message: message)
       }
 
       if rendered.hasRemoteContent && !allowRemote {
-        RemoteContentBar {
+        RemoteContentBar(sender: sender) { exception in
+          if let exception {
+            store.addRemoteContentException(exception)
+          }
           store.allowRemoteContent(message.reference)
         }
         .transition(.move(edge: .top).combined(with: .opacity))
       }
 
-      MessageWebView(rendered: rendered) { url in
-        openWindow(id: WindowID.compose, value: store.newDraft(to: MailtoLink.address(url)))
+      if let feedPage {
+        WebPageView(url: feedPage)
+          .clipShape(.rect(cornerRadius: 14))
+      } else {
+        MessageWebView(rendered: rendered) { url in
+          openWindow(id: WindowID.compose, value: store.newDraft(to: MailtoLink.address(url)))
+        }
+        .clipShape(.rect(cornerRadius: rendered.isPlainText ? 0 : 14))
       }
-      .clipShape(.rect(cornerRadius: rendered.isPlainText ? 0 : 14))
 
       let visibleAttachments = message.parsed.attachments.filter { $0.mimeType != "text/calendar" }
       if !visibleAttachments.isEmpty {
@@ -185,6 +281,15 @@ private struct MessageHeaderCard: View {
   @State private var eventDraft: EventDraft?
 
   private var parsed: ParsedMessage { message.parsed }
+
+  /// Reading & Display › Show only display name for people in my address book.
+  private func shown(_ address: MailAddress) -> String {
+    if Preferences.bool(Preferences.displayNameOnly), let card = contacts.card(forEmail: address.email) {
+      return card.displayName.nilIfEmpty ?? address.displayName
+    }
+    return address.formatted
+  }
+
   private var summary: MessageSummary {
     store.items.first { $0.reference == message.reference }?.summary ?? message.summary
   }
@@ -255,10 +360,10 @@ private struct MessageHeaderCard: View {
       } else {
       Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: 3) {
         if !parsed.to.isEmpty {
-          headerRow("To", parsed.to.map(\.formatted).joined(separator: ", "))
+          headerRow("To", parsed.to.map(shown).joined(separator: ", "))
         }
         if !parsed.cc.isEmpty {
-          headerRow("Cc", parsed.cc.map(\.formatted).joined(separator: ", "))
+          headerRow("Cc", parsed.cc.map(shown).joined(separator: ", "))
         }
         if let groups = parsed.headers["Newsgroups"] {
           headerRow("Newsgroups", groups)
@@ -332,7 +437,7 @@ private struct MessageHeaderCard: View {
           }
           Divider()
           if !isStandalone {
-            Button("Open in New Window") { openWindow(id: WindowID.message, value: message.reference) }
+            Button("Open in New Window") { store.openMessageWindow(message.reference, using: openWindow) }
           }
           Button("View Source") { showingSource = true }
           Button("Save As…") { saveMessage() }
@@ -492,7 +597,9 @@ private struct InvitationCard: View {
 }
 
 private struct RemoteContentBar: View {
-  let onAllow: () -> Void
+  let sender: MailAddress?
+  /// Called with a sender address or domain to always allow, or nil to allow this message only.
+  let onAllow: (String?) -> Void
 
   var body: some View {
     HStack(spacing: 10) {
@@ -501,13 +608,59 @@ private struct RemoteContentBar: View {
         .font(.callout)
         .lineLimit(2)
       Spacer()
-      Button("Show Remote Content", action: onAllow)
-        .buttonStyle(.glassProminent)
-        .controlSize(.small)
+      Menu {
+        Button("Show Remote Content in This Message") { onAllow(nil) }
+        if let sender {
+          Divider()
+          Button("Allow Remote Content from \(sender.email)") { onAllow(sender.email) }
+          if let domain = sender.email.split(separator: "@").last {
+            Button("Allow Remote Content from \(domain)") { onAllow(String(domain)) }
+          }
+        }
+      } label: {
+        Text("Options")
+      } primaryAction: {
+        onAllow(nil)
+      }
+      .menuStyle(.button)
+      .buttonStyle(.glassProminent)
+      .controlSize(.small)
+      .fixedSize()
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 10)
     .glassEffect(.regular.tint(.yellow.opacity(0.35)), in: .rect(cornerRadius: 14))
+  }
+}
+
+/// A tinted notification bar above the message body, like Thunderbird's message notification box.
+private struct NoticeBar<Actions: View>: View {
+  let symbol: String
+  let tint: Color
+  let text: String
+  @ViewBuilder var actions: Actions
+
+  init(symbol: String, tint: Color, text: String, @ViewBuilder actions: () -> Actions = { EmptyView() }) {
+    self.symbol = symbol
+    self.tint = tint
+    self.text = text
+    self.actions = actions()
+  }
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Image(systemName: symbol)
+        .foregroundStyle(tint)
+      Text(text)
+        .font(.callout)
+        .fixedSize(horizontal: false, vertical: true)
+      Spacer()
+      actions
+        .controlSize(.small)
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
+    .glassEffect(.regular.tint(tint.opacity(0.25)), in: .rect(cornerRadius: 14))
   }
 }
 
@@ -625,5 +778,22 @@ private struct MailStartPage: View {
     .padding(40)
     .glassEffect(.regular, in: .rect(cornerRadius: 28))
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+}
+
+/// A feed item's web page (View › Feed Message Body As › Web Page).
+struct WebPageView: NSViewRepresentable {
+  let url: URL
+
+  func makeNSView(context: Context) -> WKWebView {
+    let configuration = WKWebViewConfiguration()
+    configuration.websiteDataStore = .nonPersistent()
+    let webView = WKWebView(frame: .zero, configuration: configuration)
+    webView.load(URLRequest(url: url))
+    return webView
+  }
+
+  func updateNSView(_ webView: WKWebView, context: Context) {
+    if webView.url != url { webView.load(URLRequest(url: url)) }
   }
 }

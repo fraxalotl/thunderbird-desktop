@@ -15,6 +15,18 @@ struct SettingsView: View {
       Tab("General", systemImage: "gearshape", value: "general") {
         GeneralSettings()
       }
+      Tab("Composition", systemImage: "square.and.pencil", value: "composition") {
+        CompositionSettings()
+      }
+      Tab("Privacy & Security", systemImage: "lock.shield", value: "privacy") {
+        PrivacySettings()
+      }
+      Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: "chat") {
+        ChatSettings()
+      }
+      Tab("Calendar", systemImage: "calendar", value: "calendar") {
+        CalendarSettings()
+      }
       Tab("Accounts", systemImage: "at", value: "accounts") {
         AccountsSettings()
       }
@@ -28,50 +40,7 @@ struct SettingsView: View {
         OAuthSettings()
       }
     }
-    .frame(width: 780, height: 580)
-  }
-}
-
-private struct GeneralSettings: View {
-  @AppStorage(Preferences.checkInterval) private var checkInterval = 10
-  @AppStorage(Preferences.syncLimit) private var syncLimit = 250
-  @AppStorage(Preferences.markReadOnOpen) private var markReadOnOpen = true
-  @AppStorage(Preferences.allowRemoteContent) private var allowRemoteContent = false
-  @AppStorage(Preferences.junkFilter) private var junkFilter = true
-  @AppStorage(Preferences.notifications) private var notifications = true
-  @AppStorage(Preferences.threaded) private var threaded = false
-
-  var body: some View {
-    Form {
-      Section("Checking for Mail") {
-        Picker("Check for new messages every", selection: $checkInterval) {
-          ForEach([1, 5, 10, 15, 30, 60], id: \.self) { minutes in
-            Text(minutes == 1 ? "minute" : "\(minutes) minutes").tag(minutes)
-          }
-        }
-        Picker("Keep this many recent messages per folder", selection: $syncLimit) {
-          ForEach([100, 250, 500, 1000, 2500], id: \.self) { Text($0.formatted()).tag($0) }
-        }
-        Toggle("Show a notification when new mail arrives", isOn: $notifications)
-        Text("IMAP accounts that support IDLE are also told about new mail immediately.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-      Section("Reading") {
-        Toggle("Mark messages as read when displayed", isOn: $markReadOnOpen)
-        Toggle("Group messages by conversation (threaded view)", isOn: $threaded)
-      }
-      Section {
-        Toggle("Allow remote content in messages", isOn: $allowRemoteContent)
-        Toggle("Use the adaptive junk filter on new mail", isOn: $junkFilter)
-      } header: {
-        Text("Privacy & Security")
-      } footer: {
-        Text("Remote images and styles can tell senders when and where you read their messages. The junk filter learns from the messages you mark as junk or not junk.")
-          .foregroundStyle(.secondary)
-      }
-    }
-    .formStyle(.grouped)
+    .frame(width: 860, height: 640)
   }
 }
 
@@ -187,7 +156,13 @@ private struct AccountEditor: View {
       Section("Account") {
         TextField("Account name", text: $account.label)
       }
-      if account.kind != .local {
+      if account.kind == .feed {
+        Section("Feeds") {
+          Text("Manage subscriptions from the account's Subscribe… menu in the folder pane.")
+            .foregroundStyle(.secondary)
+        }
+      }
+      if account.kind != .local && account.kind != .feed {
         Section("Default Identity") {
           TextField("Your name", text: $account.fullName)
           TextField("Email address", text: $account.email)
@@ -225,6 +200,9 @@ private struct AccountEditor: View {
             Toggle("Leave messages on the server", isOn: $account.leaveMessagesOnServer)
           }
         }
+        if account.kind == .ews {
+          securitySection
+        }
         if account.kind == .imap || account.kind == .pop3 {
           Section("Outgoing Server (SMTP)") {
             ServerConfigEditor(config: $account.outgoing, defaultPorts: ServerConfigEditor.smtpPorts)
@@ -233,6 +211,7 @@ private struct AccountEditor: View {
           securitySection
         }
       }
+      AccountOptionsEditor(account: $account)
       Section {
         HStack {
           if let status {

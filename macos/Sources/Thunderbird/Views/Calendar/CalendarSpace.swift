@@ -172,17 +172,21 @@ private struct CalendarSidebar: View {
 
 struct MonthGridView: View {
   @Environment(CalendarStore.self) private var calendar
+  @AppStorage(Preferences.showWeekNumbers) private var showWeekNumbers = false
   let weeks: Int
   let onEdit: (EventDraft) -> Void
 
   private var days: [Date] {
     let start = calendar.visibleRange.start
-    return (0..<(weeks * 7)).compactMap { Calendar.current.date(byAdding: .day, value: $0, to: start) }
+    return (0..<(weeks * 7)).compactMap { Preferences.calendar.date(byAdding: .day, value: $0, to: start) }
   }
 
   var body: some View {
     VStack(spacing: 0) {
       HStack(spacing: 0) {
+        if showWeekNumbers {
+          Color.clear.frame(width: 28)
+        }
         ForEach(Array(days.prefix(7)), id: \.self) { day in
           Text(day.formatted(.dateTime.weekday(.abbreviated)))
             .font(.caption.weight(.semibold))
@@ -194,6 +198,15 @@ struct MonthGridView: View {
       Grid(horizontalSpacing: 1, verticalSpacing: 1) {
         ForEach(0..<weeks, id: \.self) { week in
           GridRow {
+            if showWeekNumbers {
+              Text("\(Preferences.calendar.component(.weekOfYear, from: days[week * 7]))")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 28)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .padding(.top, 6)
+                .background(.background)
+            }
             ForEach(days[(week * 7)..<(week * 7 + 7)], id: \.self) { day in
               DayCell(day: day, onEdit: onEdit)
             }
@@ -285,7 +298,7 @@ struct TimeGridView: View {
 
   private var dates: [Date] {
     let start = calendar.visibleRange.start
-    return (0..<days).compactMap { Calendar.current.date(byAdding: .day, value: $0, to: start) }
+    return (0..<days).compactMap { Preferences.calendar.date(byAdding: .day, value: $0, to: start) }
   }
 
   var body: some View {
@@ -328,7 +341,7 @@ struct TimeGridView: View {
             }
           }
         }
-        .onAppear { proxy.scrollTo(8, anchor: .top) }
+        .onAppear { proxy.scrollTo(max(0, min(23, Preferences.int(Preferences.dayStartHour))), anchor: .top) }
       }
     }
   }
@@ -362,11 +375,13 @@ private struct DayColumn: View {
     GeometryReader { geometry in
       ZStack(alignment: .topLeading) {
         VStack(spacing: 0) {
-          ForEach(0..<24, id: \.self) { _ in
+          ForEach(0..<24, id: \.self) { hour in
+            let working = hour >= Preferences.int(Preferences.dayStartHour) && hour < Preferences.int(Preferences.dayEndHour)
             Rectangle()
               .fill(.separator)
               .frame(height: 0.5)
-              .frame(maxHeight: hourHeight, alignment: .top)
+              .frame(maxWidth: .infinity, maxHeight: hourHeight, alignment: .top)
+              .background(working ? Color.clear : Color.secondary.opacity(0.06))
           }
         }
         .contentShape(.rect)

@@ -119,6 +119,44 @@ enum Preferences {
   static let junkFilter = "junkFilterEnabled"
   static let notifications = "newMailNotifications"
   static let showTodayPane = "showTodayPane"
+  // General › Reading & Display
+  static let markReadDelay = "markReadDelaySeconds"
+  static let openInExistingWindow = "openInExistingWindow"
+  static let closeOnMoveDelete = "closeWindowOnMoveDelete"
+  static let displayNameOnly = "showDisplayNameOnly"
+  static let showStartPage = "showStartPage"
+  static let notificationSound = "newMailSound"
+  // General › Files & Attachments
+  static let downloadFolder = "downloadFolder"
+  static let alwaysAskWhereToSave = "alwaysAskWhereToSave"
+  // Composition
+  static let forwardAsAttachment = "forwardAsAttachment"
+  static let autosaveMinutes = "autosaveMinutes"
+  static let confirmSendShortcut = "confirmSendShortcut"
+  static let attachmentReminder = "attachmentReminder"
+  static let attachmentKeywords = "attachmentKeywords"
+  static let composeFont = "composeFont"
+  static let composeFontSize = "composeFontSize"
+  static let composeTextColor = "composeTextColor"
+  static let composeBackground = "composeBackground"
+  static let collectAddresses = "collectAddresses"
+  static let spellcheckBeforeSend = "spellcheckBeforeSend"
+  static let defaultHTML = "composeHTMLByDefault"
+  // Privacy & Security
+  static let remoteContentExceptions = "remoteContentExceptions"
+  static let junkMarkRead = "junkMarkRead"
+  static let junkDelete = "junkDeleteInsteadOfMove"
+  static let scamDetection = "scamDetection"
+  // Chat
+  static let chatNotifications = "chatNotifications"
+  static let chatAwayMinutes = "chatAwayMinutes"
+  // Calendar
+  static let weekStart = "calendarWeekStart"
+  static let defaultEventMinutes = "defaultEventMinutes"
+  static let showWeekNumbers = "showWeekNumbers"
+  static let dayStartHour = "dayStartHour"
+  static let dayEndHour = "dayEndHour"
+  static let defaultReminderMinutes = "defaultReminderMinutes"
 
   static func register() {
     UserDefaults.standard.register(defaults: [
@@ -130,7 +168,51 @@ enum Preferences {
       junkFilter: true,
       notifications: true,
       showTodayPane: false,
+      markReadDelay: 0,
+      openInExistingWindow: false,
+      closeOnMoveDelete: false,
+      displayNameOnly: true,
+      showStartPage: true,
+      notificationSound: true,
+      downloadFolder: "",
+      alwaysAskWhereToSave: true,
+      forwardAsAttachment: false,
+      autosaveMinutes: 5,
+      confirmSendShortcut: true,
+      attachmentReminder: true,
+      attachmentKeywords: "attach, attached, attachment, enclosed, CV, resume, PDF",
+      composeFont: "",
+      composeFontSize: 14,
+      composeTextColor: "#1D1D1F",
+      composeBackground: "#FFFFFF",
+      collectAddresses: true,
+      spellcheckBeforeSend: false,
+      defaultHTML: true,
+      remoteContentExceptions: [String](),
+      junkMarkRead: true,
+      junkDelete: false,
+      scamDetection: true,
+      chatNotifications: true,
+      chatAwayMinutes: 5,
+      weekStart: Calendar.current.firstWeekday,
+      defaultEventMinutes: 60,
+      showWeekNumbers: false,
+      dayStartHour: 8,
+      dayEndHour: 17,
+      defaultReminderMinutes: 15,
     ])
+  }
+
+  static var defaults: UserDefaults { .standard }
+  static func bool(_ key: String) -> Bool { defaults.bool(forKey: key) }
+  static func int(_ key: String) -> Int { defaults.integer(forKey: key) }
+  static func string(_ key: String) -> String { defaults.string(forKey: key) ?? "" }
+
+  /// The calendar the Calendar space uses, honouring the first-day-of-week preference.
+  static var calendar: Calendar {
+    var calendar = Calendar.current
+    calendar.firstWeekday = max(1, min(7, int(weekStart)))
+    return calendar
   }
 }
 
@@ -141,6 +223,11 @@ final class MailStore {
   private(set) var folders: [UUID: [RemoteFolder]] = [:]
   var items: [MessageItem] = []
   private(set) var reader: ReaderState = .empty
+  /// A displayed message whose sender asked for a return receipt, when the account policy is "ask".
+  var pendingReceipt: LoadedMessage?
+  /// Reading & Display › Open messages in an existing window: the newest message window shows this.
+  var messageWindowRequest: MessageReference?
+  var openMessageWindows: [UUID] = []
   private(set) var refreshing: Set<UUID> = []
   var activity: String? {
     didSet {
@@ -186,6 +273,7 @@ final class MailStore {
   var threadFilter = ThreadFilter.all
   var expandedThreads: Set<MessageReference> = []
   var pendingFeedSetup = false
+  var pendingFeedSubscriptions: UUID?
   var isOffline = UserDefaults.standard.bool(forKey: "workOffline") {
     didSet { UserDefaults.standard.set(isOffline, forKey: "workOffline") }
   }
@@ -223,6 +311,8 @@ final class MailStore {
   @ObservationIgnored private var checkTask: Task<Void, Never>?
   @ObservationIgnored private var idleTasks: [UUID: Task<Void, Never>] = [:]
   @ObservationIgnored var onAddressesUsed: (([MailAddress]) -> Void)?
+  /// Expands an address book mailing list token into its members when sending.
+  @ObservationIgnored var expandMailingList: ((String) -> [MailAddress])?
 
   private static let accountsKey = "accounts"
   private static let savedSearchesKey = "savedSearches"
@@ -254,7 +344,12 @@ final class MailStore {
         source = .folder(FolderSelection(accountID: first.id, path: inboxPath(for: first.id) ?? "INBOX"))
       }
       updateDockBadge()
-      await refreshAll()
+      await withTaskGroup(of: Void.self) { group in
+        for account in accounts where account.options.checkAtStartup {
+          group.addTask { await self.refresh(accountID: account.id) }
+        }
+      }
+      await sendUnsentMessages(silently: true)
     }
     scheduleChecks()
     UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
@@ -296,13 +391,15 @@ final class MailStore {
       case .imap: IMAPBackend(account: account, cache: cache)
       case .pop3: POP3Backend(account: account)
       case .nntp: NNTPBackend(account: account, cache: cache)
+      case .feed: FeedBackend(accountID: account.id)
+      case .ews: EWSBackend(account: account, cache: cache)
       case .local:
         LocalBackend(
           accountID: account.id, root: LocalBackend.storageRoot(for: account.id),
           defaultFolders: LocalBackend.localFoldersDefaults)
       }
     backends[account.id] = backend
-    if account.kind == .imap {
+    if account.kind == .imap && account.options.usePush {
       startIdle(account.id)
     }
   }
@@ -360,7 +457,20 @@ final class MailStore {
   }
 
   func folder(role: FolderRole, in accountID: UUID) -> RemoteFolder? {
-    folders[accountID]?.first { $0.role == role && $0.isSelectable }
+    if let options = account(accountID)?.options {
+      let override: String? =
+        switch role {
+        case .sent: options.sentFolder
+        case .drafts: options.draftsFolder
+        case .templates: options.templatesFolder
+        case .archive: options.archiveFolder
+        default: nil
+        }
+      if let override, let folder = folders[accountID]?.first(where: { $0.path == override }) {
+        return folder
+      }
+    }
+    return folders[accountID]?.first { $0.role == role && $0.isSelectable }
   }
 
   func role(of reference: MessageReference) -> FolderRole {
@@ -445,6 +555,12 @@ final class MailStore {
     refreshing.insert(accountID)
     defer { refreshing.remove(accountID) }
     do {
+      if let feeds = backend as? FeedBackend {
+        let delivered = await feeds.updateAll()
+        if UserDefaults.standard.bool(forKey: Preferences.notifications) {
+          notifyFeeds(delivered, account: account(accountID))
+        }
+      }
       folders[accountID] = try await backend.refreshFolders()
       if let inbox = folder(role: .inbox, in: accountID), account(accountID)?.kind != .nntp {
         let result = try await backend.sync(
@@ -467,11 +583,54 @@ final class MailStore {
       }
       accountErrors[accountID] = nil
       updateDockBadge()
+      Task { await self.applyStoragePolicies(accountID) }
     } catch {
       if !(error is CancellationError) {
         accountErrors[accountID] = error.localizedDescription
       }
     }
+  }
+
+  /// Account Settings › Junk (purge after N days) and Synchronization & Storage (retention, offline copies).
+  private func applyStoragePolicies(_ accountID: UUID) async {
+    guard let account = account(accountID), let backend = backends[accountID] else { return }
+    let options = account.options
+    if let days = options.junkPurgeDays, days > 0, let junk = folder(role: .junk, in: accountID) {
+      let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+      let old = await backend.cachedMessages(in: junk.path).filter { $0.date < cutoff }.map(\.uid)
+      if !old.isEmpty { try? await backend.delete(uids: old, in: junk.path) }
+    }
+    if let days = options.deleteOlderThanDays, days > 0 {
+      let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+      for folder in (folders[accountID] ?? []) where folder.isSelectable && ![.drafts, .templates].contains(folder.role) {
+        let old = await backend.cachedMessages(in: folder.path)
+          .filter { $0.date < cutoff && !(options.keepStarred && $0.isFlagged) }.map(\.uid)
+        if !old.isEmpty { try? await backend.delete(uids: old, in: folder.path) }
+      }
+    }
+    if options.keepMessagesOffline, account.kind == .imap || account.kind == .ews {
+      for folder in (folders[accountID] ?? []) where folder.isSelectable && folder.role != .trash && folder.role != .junk {
+        for summary in await backend.cachedMessages(in: folder.path) {
+          _ = try? await backend.message(uid: summary.uid, in: folder.path)
+        }
+      }
+    }
+  }
+
+  /// Runs Server Settings' "Empty Trash on Exit" and "Clean up (Expunge) Inbox on Exit".
+  func prepareForQuit() async {
+    for account in accounts {
+      if account.options.emptyTrashOnExit, let trash = folder(role: .trash, in: account.id) {
+        try? await backends[account.id]?.emptyFolder(trash.path)
+      }
+      if account.options.expungeInboxOnExit, let inbox = folder(role: .inbox, in: account.id) {
+        try? await backends[account.id]?.compact(inbox.path)
+      }
+    }
+  }
+
+  var needsQuitCleanup: Bool {
+    accounts.contains { $0.options.emptyTrashOnExit || $0.options.expungeInboxOnExit }
   }
 
   private func sourceIncludes(accountID: UUID) -> Bool {
@@ -626,14 +785,22 @@ final class MailStore {
     syncTask = Task { await reloadSource() }
   }
 
+  /// Checks each account on its own interval (Account Settings › Server Settings).
   private func scheduleChecks() {
     checkTask?.cancel()
     checkTask = Task { [weak self] in
+      var lastChecked: [UUID: Date] = [:]
       while !Task.isCancelled {
-        let minutes = max(1, UserDefaults.standard.integer(forKey: Preferences.checkInterval))
-        try? await Task.sleep(for: .seconds(minutes * 60))
+        try? await Task.sleep(for: .seconds(60))
         guard let self, !Task.isCancelled else { return }
-        await self.refreshAll()
+        let now = Date()
+        for account in self.accounts where account.options.checkIntervalMinutes > 0 {
+          let last = lastChecked[account.id] ?? .distantPast
+          if now.timeIntervalSince(last) >= Double(account.options.checkIntervalMinutes * 60) {
+            lastChecked[account.id] = now
+            Task { await self.refresh(accountID: account.id) }
+          }
+        }
       }
     }
   }
@@ -662,16 +829,28 @@ final class MailStore {
         moved = await applyFilterAction(action, to: message, accountID: accountID, path: inboxPath) || moved
         if moved { break }
       }
-      if !moved, UserDefaults.standard.bool(forKey: Preferences.junkFilter), let junk = folder(role: .junk, in: accountID),
+      let options = account(accountID)?.options ?? AccountOptions()
+      if !moved, UserDefaults.standard.bool(forKey: Preferences.junkFilter), options.junkEnabled,
         let data = try? await backend.message(uid: message.uid, in: inboxPath)
       {
-        let body = ParsedMessage(data: data).plainText
-        let probability = await JunkClassifier.shared.junkProbability(
-          subject: message.subject, from: message.from.first?.email ?? "", body: body)
-        if let probability, probability > 0.95 {
+        let parsed = ParsedMessage(data: data)
+        var isJunk = false
+        if options.trustSpamHeaders {
+          let flag = parsed.headers["X-Spam-Flag"]?.lowercased() ?? ""
+          let status = parsed.headers["X-Spam-Status"]?.lowercased() ?? ""
+          isJunk = flag.hasPrefix("yes") || status.hasPrefix("yes")
+        }
+        if !isJunk {
+          let probability = await JunkClassifier.shared.junkProbability(
+            subject: message.subject, from: message.from.first?.email ?? "", body: parsed.plainText)
+          isJunk = (probability ?? 0) > 0.95
+        }
+        if isJunk {
           try? await backend.setFlags([MessageFlag.junk], on: true, uids: [message.uid], in: inboxPath)
-          _ = try? await backend.move(uids: [message.uid], from: inboxPath, to: junk.path)
-          moved = true
+          if options.moveJunk, let junk = folder(role: .junk, in: accountID) {
+            _ = try? await backend.move(uids: [message.uid], from: inboxPath, to: junk.path)
+            moved = true
+          }
         }
       }
       if !moved { remaining.append(message) }
@@ -739,6 +918,11 @@ final class MailStore {
     await reloadSource()
   }
 
+  private func notifyFeeds(_ messages: [MessageSummary], account: MailAccount?) {
+    guard !messages.isEmpty else { return }
+    notify(messages, account: account)
+  }
+
   private func notify(_ messages: [MessageSummary], account: MailAccount?) {
     guard !messages.isEmpty else { return }
     let content = UNMutableNotificationContent()
@@ -750,7 +934,7 @@ final class MailStore {
       content.body = messages.prefix(3).map { "\($0.from.first?.displayName ?? ""): \($0.subject)" }.joined(separator: "\n")
     }
     content.subtitle = account?.label ?? ""
-    content.sound = .default
+    content.sound = Preferences.bool(Preferences.notificationSound) ? .default : nil
     UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
   }
 
@@ -801,8 +985,14 @@ final class MailStore {
         guard !Task.isCancelled, selection == [reference] else { return }
         reader = .loaded(loaded)
         if !loaded.summary.isRead && UserDefaults.standard.bool(forKey: Preferences.markReadOnOpen) {
-          await setFlag(MessageFlag.seen, on: true, references: [reference])
+          let delay = Preferences.int(Preferences.markReadDelay)
+          if delay > 0 {
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, selection == [reference] else { return }
+          }
+          await setFlag(MessageFlag.seen, on: true, references: [reference], undoable: false)
         }
+        await handleReturnReceipt(loaded)
       } catch {
         guard !Task.isCancelled, selection == [reference] else { return }
         reader = .failed(error.localizedDescription)
@@ -810,8 +1000,62 @@ final class MailStore {
     }
   }
 
-  func allowsRemoteContent(_ reference: MessageReference) -> Bool {
-    UserDefaults.standard.bool(forKey: Preferences.allowRemoteContent) || remoteContentAllowed.contains(reference)
+  func allowsRemoteContent(_ reference: MessageReference, sender: MailAddress? = nil) -> Bool {
+    if UserDefaults.standard.bool(forKey: Preferences.allowRemoteContent) || remoteContentAllowed.contains(reference) {
+      return true
+    }
+    guard let sender else { return false }
+    let exceptions = Set((UserDefaults.standard.stringArray(forKey: Preferences.remoteContentExceptions) ?? []).map { $0.lowercased() })
+    let email = sender.email.lowercased()
+    let domain = String(email.split(separator: "@").last ?? "")
+    return exceptions.contains(email) || exceptions.contains(domain)
+  }
+
+  private func handleReturnReceipt(_ loaded: LoadedMessage) async {
+    pendingReceipt = nil
+    guard loaded.account.kind != .nntp, loaded.account.kind != .feed, loaded.folderRole == .inbox || loaded.folderRole == .normal,
+      ReturnReceipt.requestedAddress(in: loaded.parsed) != nil, !loaded.summary.flags.contains(MessageFlag.mdnSent)
+    else { return }
+    switch loaded.account.options.receiptPolicy {
+    case .never: await markReceiptHandled(loaded)
+    case .always: await sendReturnReceipt(loaded)
+    case .ask: pendingReceipt = loaded
+    }
+  }
+
+  func sendReturnReceipt(_ loaded: LoadedMessage) async {
+    pendingReceipt = nil
+    guard let recipient = ReturnReceipt.requestedAddress(in: loaded.parsed) else { return }
+    let recipients = Set(loaded.parsed.to.map { $0.email.lowercased() } + loaded.parsed.cc.map { $0.email.lowercased() })
+    let identity = loaded.account.identities.first { recipients.contains($0.email.lowercased()) } ?? loaded.account.identity
+    let sender = MailAddress(name: identity.fullName, email: identity.email)
+    let messageID = OutgoingMessage.makeMessageID(domainOf: sender.email)
+    let data = ReturnReceipt.report(for: loaded.parsed, from: sender, to: recipient, messageID: messageID)
+    do {
+      try await MailSender.sendRaw(data, from: sender.email, to: [recipient.email], account: loaded.account)
+      activity = "Sent a return receipt to \(recipient.email)"
+    } catch {
+      report(error, title: "Couldn't send the return receipt")
+      return
+    }
+    await markReceiptHandled(loaded)
+  }
+
+  func ignoreReturnReceipt(_ loaded: LoadedMessage) async {
+    pendingReceipt = nil
+    await markReceiptHandled(loaded)
+  }
+
+  private func markReceiptHandled(_ loaded: LoadedMessage) async {
+    await setFlag(MessageFlag.mdnSent, on: true, references: [loaded.reference], undoable: false)
+  }
+
+  /// "Allow remote content from …" in the remote content bar adds a sender or domain exception.
+  func addRemoteContentException(_ value: String) {
+    var list = UserDefaults.standard.stringArray(forKey: Preferences.remoteContentExceptions) ?? []
+    if !list.contains(value.lowercased()) { list.append(value.lowercased()) }
+    UserDefaults.standard.set(list, forKey: Preferences.remoteContentExceptions)
+    remoteContentAllowed.formUnion([])
   }
 
   func allowRemoteContent(_ reference: MessageReference) {
@@ -895,6 +1139,24 @@ final class MailStore {
 
   func delete(_ targets: Set<MessageReference>, permanently: Bool = false) async {
     guard !targets.isEmpty else { return }
+    if !permanently {
+      let markOnly = targets.filter { account($0.accountID)?.options.deleteModel == .markDeleted }
+      if !markOnly.isEmpty {
+        await setFlag(MessageFlag.deleted, on: true, references: Set(markOnly))
+      }
+      let immediate = Set(targets.filter { account($0.accountID)?.options.deleteModel == .removeImmediately })
+      if !immediate.isEmpty {
+        await delete(immediate, permanently: true)
+      }
+      let rest = targets.subtracting(markOnly).subtracting(immediate)
+      guard !rest.isEmpty else { return }
+      await deleteToTrash(rest)
+      return
+    }
+    await deleteToTrash(targets, permanently: true)
+  }
+
+  private func deleteToTrash(_ targets: Set<MessageReference>, permanently: Bool = false) async {
     removeFromList(targets)
     for (folder, uids) in grouped(targets) {
       guard let backend = backends[folder.accountID] else { continue }
@@ -917,6 +1179,16 @@ final class MailStore {
   }
 
   func move(_ targets: Set<MessageReference>, to role: FolderRole) async {
+    if role == .archive {
+      let byGranularity = Dictionary(grouping: targets) { account($0.accountID)?.options.archiveGranularity ?? .single }
+      if let dated = byGranularity.filter({ $0.key != .single }).values.first, !dated.isEmpty {
+        await archiveIntoSubfolders(Set(byGranularity.filter { $0.key != .single }.values.flatMap { $0 }))
+        let single = Set(byGranularity[.single] ?? [])
+        if single.isEmpty { return }
+        await move(single, to: role)
+        return
+      }
+    }
     removeFromList(targets.filter { reference in
       folder(role: role, in: reference.accountID).map { $0.path != reference.path } ?? false
     })
@@ -929,6 +1201,42 @@ final class MailStore {
           to: FolderSelection(accountID: folder.accountID, path: destination.path))
       } catch {
         report(error, title: "Couldn't move the message")
+      }
+    }
+  }
+
+  /// Archives into Archives/2026 or Archives/2026/2026-10 folders, as Thunderbird's archive options do.
+  private func archiveIntoSubfolders(_ targets: Set<MessageReference>) async {
+    for (folder, uids) in grouped(targets) {
+      guard let account = account(folder.accountID), let archive = self.folder(role: .archive, in: folder.accountID),
+        let backend = backends[folder.accountID]
+      else { continue }
+      let delimiter = archive.delimiter ?? "/"
+      var byDestination: [String: [UInt32]] = [:]
+      for uid in uids {
+        let date = items.first { $0.reference.accountID == folder.accountID && $0.reference.path == folder.path && $0.reference.uid == uid }?.summary.date ?? Date()
+        let year = Calendar.current.component(.year, from: date)
+        let month = Calendar.current.component(.month, from: date)
+        var path = "\(archive.path)\(delimiter)\(year)"
+        if account.options.archiveGranularity == .monthly {
+          path += "\(delimiter)\(year)-\(String(format: "%02d", month))"
+        }
+        byDestination[path, default: []].append(uid)
+      }
+      for (destination, group) in byDestination {
+        if folders[folder.accountID]?.contains(where: { $0.path == destination }) != true {
+          var parent = archive.path
+          for component in destination.dropFirst(archive.path.count + delimiter.count).components(separatedBy: delimiter) {
+            let child = "\(parent)\(delimiter)\(component)"
+            if folders[folder.accountID]?.contains(where: { $0.path == child }) != true {
+              _ = try? await backend.createFolder(component, parent: parent)
+              folders[folder.accountID] = (try? await backend.refreshFolders()) ?? folders[folder.accountID]
+            }
+            parent = child
+          }
+        }
+        removeFromList(Set(group.map { MessageReference(accountID: folder.accountID, path: folder.path, uid: $0) }))
+        _ = try? await backend.move(uids: group, from: folder.path, to: destination)
       }
     }
   }
@@ -983,7 +1291,12 @@ final class MailStore {
     }
     await setFlag(isJunk ? MessageFlag.junk : MessageFlag.notJunk, on: true)
     await setFlag(isJunk ? MessageFlag.notJunk : MessageFlag.junk, on: false)
-    if isJunk {
+    if isJunk && Preferences.bool(Preferences.junkMarkRead) {
+      await setFlag(MessageFlag.seen, on: true, undoable: false)
+    }
+    if isJunk && Preferences.bool(Preferences.junkDelete) {
+      await deleteSelected()
+    } else if isJunk {
       await moveSelected(to: .junk)
     } else if targets.contains(where: { role(of: $0.reference) == .junk }) {
       await moveSelected(to: .inbox)
@@ -1193,15 +1506,22 @@ final class MailStore {
     }
   }
 
+  private func expandingLists(_ field: String) -> [MailAddress] {
+    MailAddress.parseList(field).flatMap { address -> [MailAddress] in
+      guard !address.email.contains("@"), let members = expandMailingList?(address.email), !members.isEmpty else { return [address] }
+      return members
+    }
+  }
+
   private func outgoingMessage(_ draft: ComposeDraft, forDraft: Bool) throws -> (MailAccount, OutgoingMessage) {
     guard let (account, identity) = identity(for: draft) else {
       throw MailError.server("Set up an account before sending mail.")
     }
     var message = OutgoingMessage(
       from: identity.address,
-      to: MailAddress.parseList(draft.to),
-      cc: MailAddress.parseList(draft.cc),
-      bcc: MailAddress.parseList(draft.bcc),
+      to: forDraft ? MailAddress.parseList(draft.to) : expandingLists(draft.to),
+      cc: forDraft ? MailAddress.parseList(draft.cc) : expandingLists(draft.cc),
+      bcc: forDraft ? MailAddress.parseList(draft.bcc) : expandingLists(draft.bcc),
       subject: draft.subject,
       body: draft.body,
       inReplyTo: draft.inReplyTo,
@@ -1228,6 +1548,10 @@ final class MailStore {
     if !draft.followupTo.isEmpty {
       message.extraHeaders.append(HeaderField(name: "Followup-To", value: draft.followupTo))
     }
+    if !account.options.organization.isEmpty {
+      message.extraHeaders.append(HeaderField(name: "Organization", value: account.options.organization))
+    }
+    message.bcc += MailAddress.parseList(account.options.bccAddresses)
     message.priority = draft.priority
     message.requestReturnReceipt = draft.requestReturnReceipt
     message.includeBccHeader = forDraft
@@ -1250,7 +1574,9 @@ final class MailStore {
     activity = "Sending message…"
     defer { activity = nil }
     let rendered = try await MailSender.send(message, account: account, requestDSN: draft.requestDSN)
-    onAddressesUsed?(message.allRecipients)
+    if Preferences.bool(Preferences.collectAddresses) {
+      onAddressesUsed?(message.allRecipients)
+    }
     await afterSending(draft, account: account, rendered: rendered)
   }
 
@@ -1259,7 +1585,9 @@ final class MailStore {
     let serverSavesSent = host.hasSuffix("gmail.com") || host.hasSuffix("googlemail.com")
     let sentTarget =
       draft.copyToFolder.map { ($0.accountID, $0.path) } ?? folder(role: .sent, in: account.id).map { (account.id, $0.path) }
-    if !serverSavesSent, account.kind != .nntp, let (accountID, path) = sentTarget {
+    if !serverSavesSent, account.kind != .nntp, account.kind != .ews, account.options.saveSentCopy || draft.copyToFolder != nil,
+      let (accountID, path) = sentTarget
+    {
       try? await backends[accountID]?.append(rendered, to: path, flags: [MessageFlag.seen])
     }
     if let source = draft.source, let backend = backends[source.accountID] {

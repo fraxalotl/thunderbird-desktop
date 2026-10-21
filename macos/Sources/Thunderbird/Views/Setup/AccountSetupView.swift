@@ -8,13 +8,39 @@ import ThunderbirdCore
 struct AccountSetupView: View {
   enum Mode: String, CaseIterable, Identifiable {
     case email = "Email"
+    case exchange = "Exchange"
     case news = "Newsgroups"
+    case feeds = "Feeds"
     case importProfile = "Import"
     var id: String { rawValue }
+
+    var title: String {
+      switch self {
+      case .email: "Set Up Your Existing Email Address"
+      case .exchange: "Add a Microsoft Exchange Account"
+      case .news: "Add a Newsgroup Account"
+      case .feeds: "Add a Blogs & News Feeds Account"
+      case .importProfile: "Import from Thunderbird"
+      }
+    }
+
+    var subtitle: String {
+      switch self {
+      case .email: "Thunderbird will look up your provider's settings for you."
+      case .exchange: "Connects to Exchange and Microsoft 365 with Exchange Web Services."
+      case .news: "Read and post to Usenet newsgroups."
+      case .feeds: "Follow websites and blogs with RSS and Atom."
+      case .importProfile: "Bring over the accounts from an existing Thunderbird profile."
+      }
+    }
   }
 
   @Environment(\.dismiss) private var dismiss
-  @State private var mode = Mode.email
+  @State private var mode: Mode
+
+  init(mode: Mode = .email) {
+    _mode = State(initialValue: mode)
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -23,14 +49,10 @@ struct AccountSetupView: View {
           .resizable()
           .frame(width: 52, height: 52)
         VStack(alignment: .leading, spacing: 2) {
-          Text(mode == .email ? "Set Up Your Existing Email Address" : mode == .news ? "Add a Newsgroup Account" : "Import from Thunderbird")
+          Text(mode.title)
             .font(.title2.weight(.semibold))
-          Text(
-            mode == .email
-              ? "Thunderbird will look up your provider's settings for you."
-              : mode == .news ? "Read and post to Usenet newsgroups." : "Bring over the accounts from an existing Thunderbird profile."
-          )
-          .foregroundStyle(.secondary)
+          Text(mode.subtitle)
+            .foregroundStyle(.secondary)
         }
         Spacer()
       }
@@ -45,12 +67,203 @@ struct AccountSetupView: View {
 
       switch mode {
       case .email: EmailSetup(onDone: { dismiss() })
+      case .exchange: ExchangeSetup(onDone: { dismiss() })
       case .news: NewsSetup(onDone: { dismiss() })
+      case .feeds: FeedSetup(onDone: { dismiss() })
       case .importProfile: ProfileImportView(onDone: { dismiss() })
       }
     }
-    .frame(width: 580)
+    .frame(width: 600)
     .frame(minHeight: 440)
+  }
+}
+
+private struct ExchangeSetup: View {
+  @Environment(MailStore.self) private var store
+  let onDone: () -> Void
+  @State private var fullName = NSFullUserName()
+  @State private var email = ""
+  @State private var username = ""
+  @State private var password = ""
+  @State private var useOAuth = false
+  @State private var server = ""
+  @State private var working = false
+  @State private var error: String?
+
+  var body: some View {
+    VStack(spacing: 0) {
+      Form {
+        Section {
+          TextField("Your full name", text: $fullName)
+          TextField("Email address", text: $email, prompt: Text("you@company.com"))
+            .onChange(of: email) { _, value in if username.isEmpty || username == String(value.dropLast()) { username = value } }
+          TextField("Username", text: $username, prompt: Text("you@company.com or DOMAIN\\user"))
+          Toggle("Sign in with Microsoft (OAuth2)", isOn: $useOAuth)
+          if !useOAuth {
+            SecureField("Password", text: $password)
+          }
+        }
+        Section {
+          TextField("Server", text: $server, prompt: Text("Found automatically, e.g. outlook.office365.com"))
+        } footer: {
+          Text("Leave the server empty to look it up with Autodiscover.").foregroundStyle(.secondary)
+        }
+        if let error {
+          Label(error, systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red)
+        }
+      }
+      .formStyle(.grouped)
+      .scrollContentBackground(.hidden)
+      HStack {
+        if working {
+          ProgressView().controlSize(.small)
+          Text("Connecting to Exchange…").foregroundStyle(.secondary)
+        }
+        Spacer()
+        Button("Cancel", role: .cancel, action: onDone)
+          .keyboardShortcut(.cancelAction)
+        Button("Done") { Task { await finish() } }
+          .buttonStyle(.glassProminent)
+          .keyboardShortcut(.defaultAction)
+          .disabled(working || !email.contains("@") || (!useOAuth && password.isEmpty))
+      }
+      .padding(20)
+    }
+  }
+
+  private func finish() async {
+    working = true
+    error = nil
+    defer { working = false }
+    var host = server.trimmingCharacters(in: .whitespaces)
+    if host.isEmpty {
+      guard let endpoint = await EWSClient.discoverEndpoint(email: email, username: username, password: useOAuth ? nil : password),
+        let discovered = endpoint.host()
+      else {
+        error = "The Exchange server couldn't be found automatically. Enter its name."
+        return
+      }
+      host = discovered
+    }
+    let incoming = ServerConfig(host: host, port: 443, security: .tls, username: username, auth: useOAuth ? .oauth2 : .password)
+    let account = MailAccount(kind: .ews, fullName: fullName, email: email, incoming: incoming, outgoing: .none)
+    do {
+      let credential =
+        useOAuth ? try await Credentials.resolve(incoming, key: account.incomingKeychainKey, interactive: true) : .password(password)
+      try await EWSBackend.testConnection(account: account, credential: credential)
+      try store.addAccount(account, incomingPassword: useOAuth ? nil : password, outgoingPassword: nil)
+      onDone()
+    } catch {
+      self.error = error.localizedDescription
+    }
+  }
+}
+
+private struct FeedSetup: View {
+  @Environment(MailStore.self) private var store
+  let onDone: () -> Void
+  @State private var name = "Blogs & News Feeds"
+
+  var body: some View {
+    VStack(spacing: 0) {
+      Form {
+        TextField("Account name", text: $name)
+        Text("After adding the account, right-click it in the folder pane and choose Subscribe… to add feeds.")
+          .foregroundStyle(.secondary)
+      }
+      .formStyle(.grouped)
+      .scrollContentBackground(.hidden)
+      HStack {
+        Spacer()
+        Button("Cancel", role: .cancel, action: onDone)
+          .keyboardShortcut(.cancelAction)
+        Button("Add Account") {
+          let account = MailAccount(kind: .feed, fullName: "", email: "", label: name, incoming: .none, outgoing: .none)
+          try? store.addAccount(account, incomingPassword: nil, outgoingPassword: nil)
+          store.pendingFeedSubscriptions = account.id
+          onDone()
+        }
+        .buttonStyle(.glassProminent)
+        .keyboardShortcut(.defaultAction)
+        .disabled(name.isEmpty)
+      }
+      .padding(20)
+    }
+  }
+}
+
+/// Feed account › Subscribe…: Thunderbird's Feed Subscriptions dialog.
+struct FeedSubscriptionsView: View {
+  @Environment(MailStore.self) private var store
+  @Environment(\.dismiss) private var dismiss
+  let accountID: UUID
+  @State private var subscriptions: [FeedSubscription] = []
+  @State private var address = ""
+  @State private var working = false
+  @State private var error: String?
+
+  private var backend: FeedBackend? { store.backend(accountID) as? FeedBackend }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("Feed Subscriptions").font(.title3.weight(.semibold))
+      List(subscriptions) { subscription in
+        HStack {
+          Image(systemName: "dot.radiowaves.up.forward").foregroundStyle(.orange)
+          VStack(alignment: .leading) {
+            Text(subscription.title)
+            Text(subscription.url).font(.caption).foregroundStyle(.secondary)
+          }
+          Spacer()
+          Button("Unsubscribe") {
+            Task {
+              await backend?.unsubscribe(subscription.url)
+              subscriptions = await backend?.subscriptions ?? []
+            }
+          }
+          .buttonStyle(.glass)
+        }
+      }
+      .frame(minHeight: 200)
+      HStack {
+        TextField("Feed or website address", text: $address)
+          .textFieldStyle(.roundedBorder)
+          .onSubmit(add)
+        Button("Add", action: add)
+          .buttonStyle(.glassProminent)
+          .disabled(address.isEmpty || working)
+      }
+      if working { ProgressView().controlSize(.small) }
+      if let error { Text(error).foregroundStyle(.red) }
+      HStack {
+        Spacer()
+        Button("Done") {
+          Task { await store.refresh(accountID: accountID) }
+          dismiss()
+        }
+        .keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(22)
+    .frame(width: 560, height: 460)
+    .task { subscriptions = await backend?.subscriptions ?? [] }
+  }
+
+  private func add() {
+    let value = address
+    working = true
+    error = nil
+    Task {
+      do {
+        _ = try await backend?.subscribe(to: value)
+        subscriptions = await backend?.subscriptions ?? []
+        address = ""
+        await store.refresh(accountID: accountID)
+      } catch {
+        self.error = error.localizedDescription
+      }
+      working = false
+    }
   }
 }
 

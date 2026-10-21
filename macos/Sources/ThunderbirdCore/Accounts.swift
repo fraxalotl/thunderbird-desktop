@@ -5,7 +5,7 @@
 import Foundation
 
 public enum AccountKind: String, Codable, Sendable, CaseIterable, Hashable {
-  case imap, pop3, local, nntp
+  case imap, pop3, local, nntp, feed, ews
 
   public var label: String {
     switch self {
@@ -13,6 +13,8 @@ public enum AccountKind: String, Codable, Sendable, CaseIterable, Hashable {
     case .pop3: "POP3"
     case .local: "Local Folders"
     case .nntp: "Newsgroups"
+    case .feed: "Blogs & News Feeds"
+    case .ews: "Exchange"
     }
   }
 }
@@ -87,6 +89,88 @@ public struct Identity: Codable, Sendable, Hashable, Identifiable {
   public var address: MailAddress { MailAddress(name: fullName, email: email) }
 }
 
+/// Thunderbird's per-account settings beyond identity and servers (Account Settings panes).
+public struct AccountOptions: Codable, Sendable, Hashable {
+  public enum DeleteModel: String, Codable, Sendable, CaseIterable { case moveToTrash, markDeleted, removeImmediately }
+  public enum ArchiveGranularity: String, Codable, Sendable, CaseIterable { case single, yearly, monthly }
+  public enum ReceiptPolicy: String, Codable, Sendable, CaseIterable { case never, always, ask }
+
+  // Server Settings
+  public var checkAtStartup = true
+  public var checkIntervalMinutes = 10
+  public var usePush = true
+  public var deleteModel = DeleteModel.moveToTrash
+  public var expungeInboxOnExit = false
+  public var emptyTrashOnExit = false
+  public var popLeaveDays: Int?
+  // Copies & Folders
+  public var saveSentCopy = true
+  public var sentFolder: String?
+  public var bccAddresses = ""
+  public var archiveFolder: String?
+  public var archiveGranularity = ArchiveGranularity.single
+  public var draftsFolder: String?
+  public var templatesFolder: String?
+  // Composition & Addressing
+  public var quoteOnReply = true
+  public var replyAboveQuote = false
+  public var signatureBelowQuote = true
+  public var signatureInReplies = true
+  public var signatureFile: String?
+  public var attachVCard = false
+  public var organization = ""
+  // Junk Settings
+  public var junkEnabled = true
+  public var trustSpamHeaders = true
+  public var moveJunk = true
+  public var junkPurgeDays: Int?
+  // Synchronization & Storage
+  public var keepMessagesOffline = false
+  public var deleteOlderThanDays: Int?
+  public var keepStarred = true
+  // Return Receipts
+  public var requestReceiptByDefault = false
+  public var receiptPolicy = ReceiptPolicy.ask
+
+  public init() {}
+
+  public init(from decoder: Decoder) throws {
+    let defaults = AccountOptions()
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    func value<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T { (try? c.decodeIfPresent(T.self, forKey: key)) ?? fallback }
+    checkAtStartup = value(.checkAtStartup, defaults.checkAtStartup)
+    checkIntervalMinutes = value(.checkIntervalMinutes, defaults.checkIntervalMinutes)
+    usePush = value(.usePush, defaults.usePush)
+    deleteModel = value(.deleteModel, defaults.deleteModel)
+    expungeInboxOnExit = value(.expungeInboxOnExit, defaults.expungeInboxOnExit)
+    emptyTrashOnExit = value(.emptyTrashOnExit, defaults.emptyTrashOnExit)
+    popLeaveDays = try? c.decodeIfPresent(Int.self, forKey: .popLeaveDays)
+    saveSentCopy = value(.saveSentCopy, defaults.saveSentCopy)
+    sentFolder = try? c.decodeIfPresent(String.self, forKey: .sentFolder)
+    bccAddresses = value(.bccAddresses, defaults.bccAddresses)
+    archiveFolder = try? c.decodeIfPresent(String.self, forKey: .archiveFolder)
+    archiveGranularity = value(.archiveGranularity, defaults.archiveGranularity)
+    draftsFolder = try? c.decodeIfPresent(String.self, forKey: .draftsFolder)
+    templatesFolder = try? c.decodeIfPresent(String.self, forKey: .templatesFolder)
+    quoteOnReply = value(.quoteOnReply, defaults.quoteOnReply)
+    replyAboveQuote = value(.replyAboveQuote, defaults.replyAboveQuote)
+    signatureBelowQuote = value(.signatureBelowQuote, defaults.signatureBelowQuote)
+    signatureInReplies = value(.signatureInReplies, defaults.signatureInReplies)
+    signatureFile = try? c.decodeIfPresent(String.self, forKey: .signatureFile)
+    attachVCard = value(.attachVCard, defaults.attachVCard)
+    organization = value(.organization, defaults.organization)
+    junkEnabled = value(.junkEnabled, defaults.junkEnabled)
+    trustSpamHeaders = value(.trustSpamHeaders, defaults.trustSpamHeaders)
+    moveJunk = value(.moveJunk, defaults.moveJunk)
+    junkPurgeDays = try? c.decodeIfPresent(Int.self, forKey: .junkPurgeDays)
+    keepMessagesOffline = value(.keepMessagesOffline, defaults.keepMessagesOffline)
+    deleteOlderThanDays = try? c.decodeIfPresent(Int.self, forKey: .deleteOlderThanDays)
+    keepStarred = value(.keepStarred, defaults.keepStarred)
+    requestReceiptByDefault = value(.requestReceiptByDefault, defaults.requestReceiptByDefault)
+    receiptPolicy = value(.receiptPolicy, defaults.receiptPolicy)
+  }
+}
+
 public struct MailAccount: Codable, Sendable, Identifiable, Hashable {
   public var id: UUID
   public var kind: AccountKind
@@ -104,6 +188,7 @@ public struct MailAccount: Codable, Sendable, Identifiable, Hashable {
   public var securityTechnology: SecurityTechnology
   public var encryptByDefault: Bool
   public var signByDefault: Bool
+  public var options: AccountOptions
 
   public init(
     id: UUID = UUID(), kind: AccountKind = .imap, fullName: String, email: String, label: String? = nil,
@@ -125,6 +210,7 @@ public struct MailAccount: Codable, Sendable, Identifiable, Hashable {
     self.securityTechnology = .openPGP
     self.encryptByDefault = false
     self.signByDefault = false
+    self.options = AccountOptions()
   }
 
   public init(from decoder: Decoder) throws {
@@ -145,6 +231,7 @@ public struct MailAccount: Codable, Sendable, Identifiable, Hashable {
     securityTechnology = try c.decodeIfPresent(SecurityTechnology.self, forKey: .securityTechnology) ?? .openPGP
     encryptByDefault = try c.decodeIfPresent(Bool.self, forKey: .encryptByDefault) ?? false
     signByDefault = try c.decodeIfPresent(Bool.self, forKey: .signByDefault) ?? false
+    options = (try? c.decodeIfPresent(AccountOptions.self, forKey: .options)) ?? AccountOptions()
   }
 
   public static func localFolders() -> MailAccount {
@@ -155,8 +242,12 @@ public struct MailAccount: Codable, Sendable, Identifiable, Hashable {
     Identity(id: id, fullName: fullName, email: email, replyTo: replyTo, signature: signature)
   }
 
-  public var identities: [Identity] { kind == .local ? [] : [identity] + extraIdentities }
-  public var canSend: Bool { kind == .imap || kind == .pop3 || kind == .nntp }
+  public var identities: [Identity] { kind == .local || kind == .feed ? [] : [identity] + extraIdentities }
+  public var canSend: Bool { kind == .imap || kind == .pop3 || kind == .nntp || kind == .ews }
+  /// For Exchange accounts, the EWS endpoint (incoming.host holds its host name).
+  public var ewsURL: String {
+    "https://\(incoming.host)\(incoming.port == 443 || incoming.port == 0 ? "" : ":\(incoming.port)")/EWS/Exchange.asmx"
+  }
   public var address: MailAddress { MailAddress(name: fullName, email: email) }
   public var incomingKeychainKey: String { "\(id.uuidString).\(kind == .imap ? "imap" : kind.rawValue)" }
   public var outgoingKeychainKey: String { "\(id.uuidString).smtp" }
