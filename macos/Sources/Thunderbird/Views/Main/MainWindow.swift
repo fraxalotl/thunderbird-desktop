@@ -133,7 +133,10 @@ struct MailSpace: View {
       if !store.accounts.contains(where: { $0.kind != .local }) {
         WelcomeView(onSetUp: { ui.present(.accountSetup) })
       } else {
-        panes
+        VStack(spacing: 0) {
+          panes
+          if showStatusBar { StatusBar() }
+        }
           .searchable(text: $store.searchText, placement: .toolbar, prompt: "Search…")
           .searchFocused($searchFocused)
           .onSubmit(of: .search) {
@@ -145,9 +148,6 @@ struct MailSpace: View {
           .inspector(isPresented: $showTodayPane) {
             TodayPane()
               .inspectorColumnWidth(min: 220, ideal: 260, max: 340)
-          }
-          .safeAreaInset(edge: .bottom, spacing: 0) {
-            if showStatusBar { StatusBar() }
           }
       }
     }
@@ -521,7 +521,7 @@ private struct StatusBar: View {
     }
     .font(.caption)
     .foregroundStyle(.secondary)
-    .padding(.horizontal, 12)
+    .padding(.horizontal, 20)
     .padding(.vertical, 4)
     .background(.bar)
   }
