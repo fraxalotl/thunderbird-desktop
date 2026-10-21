@@ -146,6 +146,18 @@ struct AddressBookSpace: View {
     .sheet(item: $editing) { card in
       ContactEditor(initial: card)
     }
+    .onChange(of: contacts.pendingNewContact, initial: true) {
+      if contacts.pendingNewContact {
+        editing = .empty
+        contacts.pendingNewContact = false
+      }
+    }
+    .onChange(of: contacts.pendingNewList, initial: true) {
+      if contacts.pendingNewList {
+        addingGroup = true
+        contacts.pendingNewList = false
+      }
+    }
     .alert("New List", isPresented: $addingGroup) {
       TextField("Name", text: $newGroupName)
       Button("Create") {

@@ -50,7 +50,7 @@ public struct SMTPClient: Sendable {
     return reply
   }
 
-  private func open() async throws -> LineConnection {
+  private func open() async throws -> (LineConnection, [String]) {
     let connection = LineConnection(host: server.host, port: server.port, implicitTLS: server.security == .tls)
     do {
       let greeting = try await readReply(connection)
@@ -64,7 +64,7 @@ public struct SMTPClient: Sendable {
       if !server.username.isEmpty {
         try await authenticate(connection, extensions: extensions)
       }
-      return connection
+      return (connection, extensions)
     } catch {
       await connection.close()
       throw error
@@ -100,18 +100,20 @@ public struct SMTPClient: Sendable {
 
   /// Connects and authenticates without sending anything, to validate settings.
   public func verify() async throws {
-    let connection = try await open()
+    let (connection, _) = try await open()
     _ = try? await send("QUIT", on: connection, expect: [221])
     await connection.close()
   }
 
-  public func send(_ message: Data, from sender: String, to recipients: [String]) async throws {
+  public func send(_ message: Data, from sender: String, to recipients: [String], requestDSN: Bool = false) async throws {
     guard !recipients.isEmpty else { throw MailError.invalidRecipients }
-    let connection = try await open()
+    let (connection, extensions) = try await open()
+    let supportsDSN = extensions.contains { $0.uppercased().hasPrefix("DSN") }
     do {
       try await send("MAIL FROM:<\(sender)>", on: connection, expect: [250])
+      let notify = requestDSN && supportsDSN ? " NOTIFY=SUCCESS,FAILURE,DELAY" : ""
       for recipient in recipients {
-        try await send("RCPT TO:<\(recipient)>", on: connection, expect: [250, 251])
+        try await send("RCPT TO:<\(recipient)>\(notify)", on: connection, expect: [250, 251])
       }
       try await send("DATA", on: connection, expect: [354])
       try await connection.write(Self.dotStuffed(message))

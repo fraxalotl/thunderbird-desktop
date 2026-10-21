@@ -12,7 +12,36 @@ import WebKit
 @MainActor
 @Observable
 final class ReaderController {
-  @ObservationIgnored weak var webView: WKWebView?
+  @ObservationIgnored weak var webView: WKWebView? {
+    didSet { webView?.pageZoom = zoom }
+  }
+  var zoom = UserDefaults.standard.object(forKey: MailPreferences.messageZoom) as? Double ?? 1 {
+    didSet {
+      UserDefaults.standard.set(zoom, forKey: MailPreferences.messageZoom)
+      webView?.pageZoom = zoom
+    }
+  }
+  var lastFindFound = true
+
+  func zoom(by delta: Double) {
+    zoom = min(3, max(0.5, zoom + delta))
+  }
+
+  func resetZoom() {
+    zoom = 1
+  }
+
+  /// Edit › Find › Find in This Message.
+  func find(_ text: String, backwards: Bool) {
+    guard let webView, !text.isEmpty else { return }
+    let configuration = WKFindConfiguration()
+    configuration.backwards = backwards
+    configuration.wraps = true
+    Task { @MainActor in
+      let result = try? await webView.find(text, configuration: configuration)
+      lastFindFound = result?.matchFound ?? false
+    }
+  }
 
   func print() {
     guard let webView, let window = webView.window else { return }
@@ -28,7 +57,7 @@ struct MessageReaderView: View {
   var body: some View {
     switch store.reader {
     case .empty:
-      ContentUnavailableView("No Message Selected", systemImage: "envelope")
+      MailStartPage()
     case .multiple(let count):
       ContentUnavailableView(
         "\(count) Messages Selected", systemImage: "envelope.stack",
@@ -89,7 +118,11 @@ struct MessageWindow: View {
 
 struct LoadedMessageView: View {
   @Environment(MailStore.self) private var store
+  @Environment(MailUIState.self) private var ui: MailUIState?
+  @Environment(ReaderController.self) private var reader
   @Environment(\.openWindow) private var openWindow
+  @AppStorage(MailPreferences.bodyMode) private var bodyMode = BodyMode.original
+  @AppStorage(MailPreferences.attachmentsInline) private var attachmentsInline = true
   let message: LoadedMessage
   let isStandalone: Bool
 
@@ -101,9 +134,14 @@ struct LoadedMessageView: View {
 
   var body: some View {
     let allowRemote = store.allowsRemoteContent(message.reference)
-    let rendered = MessageHTML.render(message.parsed, allowRemote: allowRemote)
+    let rendered = MessageHTML.render(
+      message.parsed, allowRemote: allowRemote, mode: bodyMode, inlineAttachments: attachmentsInline)
     VStack(spacing: 12) {
       MessageHeaderCard(message: message, isStandalone: isStandalone)
+
+      if let ui, ui.findVisible {
+        FindInMessageBar(ui: ui, reader: reader)
+      }
 
       if let security = message.security {
         SecurityBar(status: security)
@@ -137,6 +175,7 @@ struct LoadedMessageView: View {
 
 private struct MessageHeaderCard: View {
   @Environment(MailStore.self) private var store
+  @AppStorage(MailPreferences.headerMode) private var headerMode = HeaderMode.normal
   @Environment(ContactsStore.self) private var contacts
   @Environment(CalendarStore.self) private var calendar
   @Environment(\.openWindow) private var openWindow
@@ -203,6 +242,17 @@ private struct MessageHeaderCard: View {
         }
       }
 
+      if headerMode == .all {
+        ScrollView {
+          Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: 3) {
+            ForEach(Array(parsed.headers.fields.enumerated()), id: \.offset) { _, field in
+              headerRow(field.name, MIMEDecoder.decodeEncodedWords(field.value))
+            }
+          }
+          .font(.caption.monospaced())
+        }
+        .frame(maxHeight: 180)
+      } else {
       Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: 3) {
         if !parsed.to.isEmpty {
           headerRow("To", parsed.to.map(\.formatted).joined(separator: ", "))
@@ -216,6 +266,7 @@ private struct MessageHeaderCard: View {
         headerRow("Date", (parsed.date ?? summary.date).formatted(date: .complete, time: .shortened))
       }
       .font(.callout)
+      }
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -514,5 +565,65 @@ private struct AttachmentBar: View {
       }
       .scrollIndicators(.never)
     }
+  }
+}
+
+/// Edit › Find › Find in This Message.
+private struct FindInMessageBar: View {
+  let ui: MailUIState
+  let reader: ReaderController
+
+  var body: some View {
+    @Bindable var ui = ui
+    HStack(spacing: 8) {
+      Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+      TextField("Find in this message", text: $ui.findText)
+        .textFieldStyle(.plain)
+        .onSubmit { reader.find(ui.findText, backwards: false) }
+      if !reader.lastFindFound && !ui.findText.isEmpty {
+        Text("Phrase not found").font(.caption).foregroundStyle(.secondary)
+      }
+      GlassEffectContainer(spacing: 4) {
+        HStack(spacing: 4) {
+          Button { reader.find(ui.findText, backwards: true) } label: { Image(systemName: "chevron.up") }
+            .accessibilityLabel("Previous match")
+          Button { reader.find(ui.findText, backwards: false) } label: { Image(systemName: "chevron.down") }
+            .accessibilityLabel("Next match")
+          Button { ui.findVisible = false } label: { Image(systemName: "xmark") }
+            .accessibilityLabel("Close find bar")
+            .keyboardShortcut(.cancelAction)
+        }
+        .buttonStyle(.glass)
+        .controlSize(.small)
+      }
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 6)
+    .glassEffect(.regular, in: .capsule)
+  }
+}
+
+/// Go › Mail Start Page: shown when no message is selected.
+private struct MailStartPage: View {
+  @Environment(MailStore.self) private var store
+
+  var body: some View {
+    VStack(spacing: 18) {
+      Image(nsImage: NSApp.applicationIconImage)
+        .resizable()
+        .frame(width: 88, height: 88)
+      Text("Thunderbird")
+        .font(.largeTitle.weight(.semibold))
+      let unread = store.unifiedUnread(.inbox)
+      Text(unread > 0 ? "You have \(unread) unread message\(unread == 1 ? "" : "s") in your inboxes." : "No message selected.")
+        .foregroundStyle(.secondary)
+      if store.isOffline {
+        Label("You're working offline.", systemImage: "wifi.slash")
+          .foregroundStyle(.orange)
+      }
+    }
+    .padding(40)
+    .glassEffect(.regular, in: .rect(cornerRadius: 28))
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 }

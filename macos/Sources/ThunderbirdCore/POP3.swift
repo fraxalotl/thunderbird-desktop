@@ -141,10 +141,10 @@ public actor POP3Backend: MailBackend {
   public func setFlags(_ flags: [String], on: Bool, uids: [UInt32], in path: String) async throws {
     try await local.setFlags(flags, on: on, uids: uids, in: path)
   }
-  public func move(uids: [UInt32], from source: String, to destination: String) async throws {
+  public func move(uids: [UInt32], from source: String, to destination: String) async throws -> [UInt32: UInt32] {
     try await local.move(uids: uids, from: source, to: destination)
   }
-  public func copy(uids: [UInt32], from source: String, to destination: String) async throws {
+  public func copy(uids: [UInt32], from source: String, to destination: String) async throws -> [UInt32: UInt32] {
     try await local.copy(uids: uids, from: source, to: destination)
   }
   public func delete(uids: [UInt32], in path: String) async throws { try await local.delete(uids: uids, in: path) }

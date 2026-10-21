@@ -56,7 +56,8 @@ struct ThunderbirdApp: App {
     }
     .defaultSize(width: 1320, height: 820)
     .commands {
-      MailCommands(store: mail)
+      MainMenus(mail: mail, calendar: calendar, chat: chat, contacts: contacts)
+      ComposeMenus(mail: mail)
     }
 
     WindowGroup("Write", id: WindowID.compose, for: ComposeDraft.self) { $draft in
@@ -74,6 +75,45 @@ struct ThunderbirdApp: App {
     }
     .defaultSize(width: 860, height: 760)
 
+    WindowGroup("Conversation", id: WindowID.conversation, for: MessageReference.self) { $reference in
+      if let reference {
+        ConversationWindow(reference: reference)
+          .environments(mail, contacts, calendar, chat)
+      }
+    }
+    .defaultSize(width: 1000, height: 760)
+
+    WindowGroup("Message", id: WindowID.savedMessage, for: URL.self) { $url in
+      if let url {
+        SavedMessageWindow(url: url)
+          .environments(mail, contacts, calendar, chat)
+      }
+    }
+    .defaultSize(width: 860, height: 760)
+
+    Window("Activity Manager", id: WindowID.activity) {
+      ActivityManagerWindow()
+        .environments(mail, contacts, calendar, chat)
+    }
+    .defaultSize(width: 520, height: 420)
+
+    Window("Saved Files", id: WindowID.savedFiles) {
+      SavedFilesWindow()
+    }
+    .defaultSize(width: 520, height: 420)
+
+    Window("Troubleshooting Information", id: WindowID.troubleshooting) {
+      TroubleshootingWindow()
+        .environments(mail, contacts, calendar, chat)
+    }
+    .defaultSize(width: 640, height: 560)
+
+    WindowGroup("Import and Export", id: WindowID.importExport, for: String.self) { $mode in
+      ImportExportWindow(mode: mode ?? "import")
+        .environments(mail, contacts, calendar, chat)
+    }
+    .defaultSize(width: 560, height: 480)
+
     Settings {
       SettingsView()
         .environments(mail, contacts, calendar, chat)
@@ -85,6 +125,12 @@ enum WindowID {
   static let main = "main"
   static let compose = "compose"
   static let message = "message"
+  static let conversation = "conversation"
+  static let savedMessage = "savedMessage"
+  static let activity = "activity"
+  static let troubleshooting = "troubleshooting"
+  static let savedFiles = "savedFiles"
+  static let importExport = "importExport"
 }
 
 extension View {

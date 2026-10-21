@@ -44,6 +44,11 @@ final class ChatStore {
     }
   }
 
+  var pendingAccountSetup = false
+  var pendingAddContact = false
+  var pendingJoin = false
+  var isAway = false
+
   @ObservationIgnored private var connections: [UUID: any ChatConnection] = [:]
   @ObservationIgnored private var listeners: [UUID: Task<Void, Never>] = [:]
   private static let accountsKey = "chatAccounts"
@@ -198,6 +203,31 @@ final class ChatStore {
         .message(ChatMessage(conversationID: key.conversationID, sender: "", text: error.localizedDescription, kind: .system)),
         accountID: key.accountID)
     }
+  }
+
+  /// Tools › Chat Status › Available / Offline.
+  func setAllOnline(_ online: Bool) {
+    isAway = false
+    for account in accounts {
+      Task {
+        if online { await connect(account.id) } else { await disconnect(account.id) }
+      }
+    }
+  }
+
+  /// Tools › Chat Status › Unavailable: tells contacts you're away where the protocol supports it.
+  func setAway(_ away: Bool) {
+    isAway = away
+    for account in accounts {
+      Task { try? await connections[account.id]?.setAway(away) }
+    }
+  }
+
+  /// File › New › Chat Contact…: opens a direct conversation (and adds an XMPP roster entry).
+  func addContact(_ name: String, accountID: UUID) async {
+    guard let account = account(accountID) else { return }
+    _ = account
+    try? await connections[accountID]?.addContact(name)
   }
 
   func join(_ name: String, accountID: UUID) async {

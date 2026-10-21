@@ -69,6 +69,8 @@ final class ContactsStore {
     didSet { reload() }
   }
   var searchText = ""
+  var pendingNewContact = false
+  var pendingNewList = false
 
   @ObservationIgnored private let store = CNContactStore()
   @ObservationIgnored private var changeObserver: NSObjectProtocol?
@@ -311,6 +313,22 @@ final class ContactsStore {
       if seen.insert(entry.id).inserted { results.append(entry.address) }
     }
     return Array(results.prefix(limit))
+  }
+
+  /// Members of a contact group (mailing list) by name, for Expand List.
+  func members(ofList name: String) -> [MailAddress] {
+    let listName = name.hasPrefix("list:") ? String(name.dropFirst(5)) : name
+    guard isAuthorized, let group = groups.first(where: { $0.name.caseInsensitiveCompare(listName) == .orderedSame }) else { return [] }
+    let request = CNContactFetchRequest(keysToFetch: Self.keys)
+    request.predicate = CNContact.predicateForContactsInGroup(withIdentifier: group.identifier)
+    var result: [MailAddress] = []
+    try? store.enumerateContacts(with: request) { contact, _ in
+      let card = Self.card(contact)
+      if let email = card.emails.first?.value {
+        result.append(MailAddress(name: card.displayName, email: email))
+      }
+    }
+    return result
   }
 
   func card(forEmail email: String) -> ContactCard? {

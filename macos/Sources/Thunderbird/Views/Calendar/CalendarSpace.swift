@@ -9,6 +9,7 @@ import ThunderbirdCore
 struct CalendarSpace: View {
   @Environment(CalendarStore.self) private var calendar
   @State private var editing: EventDraft?
+  @AppStorage("showUnifinder") private var showUnifinder = false
 
   var body: some View {
     @Bindable var calendar = calendar
@@ -23,12 +24,19 @@ struct CalendarSpace: View {
           CalendarSidebar()
             .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 320)
         } detail: {
-          Group {
-            switch calendar.mode {
-            case .day: TimeGridView(days: 1, onEdit: { editing = $0 })
-            case .week: TimeGridView(days: 7, onEdit: { editing = $0 })
-            case .multiweek: MonthGridView(weeks: 4, onEdit: { editing = $0 })
-            case .month: MonthGridView(weeks: 6, onEdit: { editing = $0 })
+          VStack(spacing: 0) {
+            if showUnifinder {
+              EventSearchPane(onEdit: { editing = $0 })
+                .frame(height: 220)
+              Divider()
+            }
+            Group {
+              switch calendar.mode {
+              case .day: TimeGridView(days: 1, onEdit: { editing = $0 })
+              case .week: TimeGridView(days: 7, onEdit: { editing = $0 })
+              case .multiweek: MonthGridView(weeks: 4, onEdit: { editing = $0 })
+              case .month: MonthGridView(weeks: 6, onEdit: { editing = $0 })
+              }
             }
           }
           .navigationTitle(title)
@@ -69,6 +77,12 @@ struct CalendarSpace: View {
     }
     .sheet(item: $editing) { draft in
       EventEditor(initial: draft)
+    }
+    .onChange(of: calendar.pendingEditor?.start, initial: true) {
+      if let pending = calendar.pendingEditor {
+        editing = pending
+        calendar.pendingEditor = nil
+      }
     }
   }
 
@@ -114,7 +128,7 @@ private struct CalendarSidebar: View {
 
   var body: some View {
     @Bindable var calendar = calendar
-    List {
+    List(selection: $calendar.selectedCalendarID) {
       DatePicker("Date", selection: $calendar.focusDate, displayedComponents: .date)
         .datePickerStyle(.graphical)
         .labelsHidden()
@@ -141,6 +155,13 @@ private struct CalendarSidebar: View {
             }
             .toggleStyle(.checkbox)
             .tint(CalendarStore.color(item))
+            .tag(item.calendarIdentifier)
+            .contextMenu {
+              Button("Delete Calendar…") {
+                calendar.selectedCalendarID = item.calendarIdentifier
+                calendar.deleteSelectedCalendar()
+              }
+            }
           }
         }
       }
@@ -488,4 +509,34 @@ struct EventEditor: View {
       mail.report(error, title: "Couldn't delete the event")
     }
   }
+}
+
+/// Events and Tasks › Events Search (Thunderbird's unifinder).
+private struct EventSearchPane: View {
+  @Environment(CalendarStore.self) private var calendar
+  let onEdit: (EventDraft) -> Void
+  @State private var query = ""
+
+  var body: some View {
+    VStack(spacing: 0) {
+      TextField("Search events", text: $query)
+        .textFieldStyle(.roundedBorder)
+        .padding(8)
+      Table(calendar.searchEvents(query)) {
+        TableColumn("Title") { (event: EKEvent) in Text(event.title ?? "") }
+        TableColumn("Start") { (event: EKEvent) in Text(event.startDate.formatted(date: .abbreviated, time: event.isAllDay ? .omitted : .shortened)) }
+        TableColumn("Location") { (event: EKEvent) in Text(event.location ?? "") }
+        TableColumn("Calendar") { (event: EKEvent) in Text(event.calendar.title) }
+      }
+      .contextMenu(forSelectionType: EKEvent.ID.self) { _ in } primaryAction: { ids in
+        if let id = ids.first, let event = calendar.searchEvents(query).first(where: { $0.id == id }) {
+          onEdit(calendar.draft(for: event))
+        }
+      }
+    }
+  }
+}
+
+extension EKEvent: @retroactive Identifiable {
+  public var id: ObjectIdentifier { ObjectIdentifier(self) }
 }

@@ -18,6 +18,7 @@ public actor IMAPClient {
   private var tagCounter = 0
   public private(set) var capabilities: Set<String> = []
   private var selectedPath: String?
+  private var lastTaggedStatus = ""
 
   public init(server: ServerConfig, credential: Credential, timeout: TimeInterval = 60) {
     self.server = server
@@ -114,6 +115,7 @@ public actor IMAPClient {
       let raw = try await readResponse()
       if raw.starts(with: prefix) {
         let status = String(decoding: raw.dropFirst(prefix.count), as: UTF8.self)
+        lastTaggedStatus = status
         if status.uppercased().hasPrefix("OK") {
           return untagged
         }
@@ -227,6 +229,21 @@ public actor IMAPClient {
 
   // MARK: - Mailboxes
 
+  /// Paths the user has subscribed to (LSUB). Empty when the server doesn't track subscriptions.
+  public func subscribedPaths() async throws -> Set<String> {
+    let responses = try await command(#"LSUB "" "*""#)
+    return Set(responses.filter { $0.keyword == "LSUB" }.compactMap { $0.values.count >= 5 ? $0.values[4].text : nil })
+  }
+
+  public func setSubscribed(_ path: String, _ subscribed: Bool) async throws {
+    try await command("\(subscribed ? "SUBSCRIBE" : "UNSUBSCRIBE") \(Self.quote(path))")
+  }
+
+  public func expungeFolder(_ path: String) async throws {
+    try await select(path)
+    try await command("EXPUNGE")
+  }
+
   public func listFolders() async throws -> [RemoteFolder] {
     let returnStatus = capabilities.contains("LIST-STATUS")
     let listCommand = returnStatus ? #"LIST "" "*" RETURN (STATUS (MESSAGES UNSEEN))"# : #"LIST "" "*""#
@@ -335,7 +352,7 @@ public actor IMAPClient {
   public func fetchSummaries(uids: [UInt32], in path: String) async throws -> [MessageSummary] {
     guard !uids.isEmpty else { return [] }
     try await ensureSelected(path)
-    let items = "UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY.PEEK[HEADER.FIELDS (CONTENT-TYPE REFERENCES)]"
+    let items = "UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY.PEEK[HEADER.FIELDS (CONTENT-TYPE REFERENCES X-PRIORITY IMPORTANCE LIST-POST)]"
     var summaries: [MessageSummary] = []
     for chunk in stride(from: 0, to: uids.count, by: 500).map({ Array(uids[$0..<min($0 + 500, uids.count)]) }) {
       let responses = try await command("UID FETCH \(Self.sequenceSet(chunk)) (\(items))")
@@ -366,16 +383,45 @@ public actor IMAPClient {
     try await command("UID STORE \(Self.sequenceSet(uids)) \(add ? "+" : "-")FLAGS.SILENT (\(flags.joined(separator: " ")))")
   }
 
-  public func move(uids: [UInt32], from source: String, to destination: String) async throws {
-    guard !uids.isEmpty else { return }
+  /// Moves messages and returns the source → destination UID map from COPYUID, when the server reports it.
+  @discardableResult
+  public func move(uids: [UInt32], from source: String, to destination: String) async throws -> [UInt32: UInt32] {
+    guard !uids.isEmpty else { return [:] }
     try await ensureSelected(source)
     let set = Self.sequenceSet(uids)
     if capabilities.contains("MOVE") {
-      try await command("UID MOVE \(set) \(Self.quote(destination))")
-      return
+      let responses = try await command("UID MOVE \(set) \(Self.quote(destination))")
+      return Self.copyUIDs(responses.map(\.line) + [lastTaggedStatus])
     }
-    try await command("UID COPY \(set) \(Self.quote(destination))")
+    let responses = try await command("UID COPY \(set) \(Self.quote(destination))")
+    let mapping = Self.copyUIDs(responses.map(\.line) + [lastTaggedStatus])
     try await expunge(uids: uids, in: source)
+    return mapping
+  }
+
+  /// Parses `[COPYUID <validity> <source set> <destination set>]` (RFC 4315).
+  static func copyUIDs(_ lines: [String]) -> [UInt32: UInt32] {
+    for line in lines {
+      guard let range = line.range(of: "[COPYUID ", options: .caseInsensitive),
+        let end = line[range.upperBound...].firstIndex(of: "]")
+      else { continue }
+      let parts = line[range.upperBound..<end].split(separator: " ")
+      guard parts.count == 3 else { continue }
+      let source = expandSet(String(parts[1]))
+      let destination = expandSet(String(parts[2]))
+      guard source.count == destination.count else { continue }
+      return Dictionary(zip(source, destination), uniquingKeysWith: { first, _ in first })
+    }
+    return [:]
+  }
+
+  static func expandSet(_ set: String) -> [UInt32] {
+    set.split(separator: ",").flatMap { part -> [UInt32] in
+      let bounds = part.split(separator: ":").compactMap { UInt32($0) }
+      guard let first = bounds.first else { return [] }
+      let last = bounds.count > 1 ? bounds[1] : first
+      return first <= last ? Array(first...last) : Array((last...first).reversed())
+    }
   }
 
   public func expunge(uids: [UInt32], in path: String) async throws {
@@ -398,10 +444,12 @@ public actor IMAPClient {
     try await command("NOOP")
   }
 
-  public func copy(uids: [UInt32], from source: String, to destination: String) async throws {
-    guard !uids.isEmpty else { return }
+  @discardableResult
+  public func copy(uids: [UInt32], from source: String, to destination: String) async throws -> [UInt32: UInt32] {
+    guard !uids.isEmpty else { return [:] }
     try await ensureSelected(source)
-    try await command("UID COPY \(Self.sequenceSet(uids)) \(Self.quote(destination))")
+    let responses = try await command("UID COPY \(Self.sequenceSet(uids)) \(Self.quote(destination))")
+    return Self.copyUIDs(responses.map(\.line) + [lastTaggedStatus])
   }
 
   public func expungeAll(in path: String) async throws {
@@ -553,7 +601,7 @@ public actor IMAPClient {
     let headerBlock = attributes.first(where: { $0.key.hasPrefix("BODY[HEADER") })?.value.data ?? Data()
     let headers = MIMEParser.parseHeaders(headerBlock + Data("\r\n\r\n".utf8))
     let contentType = headers["Content-Type"]?.lowercased() ?? ""
-    return MessageSummary(
+    var summary = MessageSummary(
       uid: uid,
       subject: field(1)?.text.map(MIMEDecoder.decodeEncodedWords) ?? "",
       from: addresses(field(2)),
@@ -567,6 +615,10 @@ public actor IMAPClient {
       hasAttachment: contentType.contains("multipart/mixed"),
       references: MessageSummary.parseReferences(headers["References"])
     )
+    summary.priority = MessageSummary.parsePriority(headers["X-Priority"] ?? headers["Importance"])
+    summary.listPost = MessageSummary.parseListPost(headers["List-Post"])
+    summary.received = attributes["INTERNALDATE"]?.text.flatMap(MailDate.parseInternalDate)
+    return summary
   }
 
   static func addresses(_ value: IMAPValue?) -> [MailAddress] {

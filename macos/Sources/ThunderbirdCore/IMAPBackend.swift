@@ -71,10 +71,37 @@ public actor IMAPBackend: MailBackend {
     cache.folders(account: account.id) ?? []
   }
 
+  /// Lists folders, showing only subscribed ones (plus the inbox) when the server tracks
+  /// subscriptions, as Thunderbird does by default.
   public func refreshFolders() async throws -> [RemoteFolder] {
-    let folders = try await perform { try await $0.listFolders() }
+    let folders = try await perform { client -> [RemoteFolder] in
+      let all = try await client.listFolders()
+      let subscribed = (try? await client.subscribedPaths()) ?? []
+      guard !subscribed.isEmpty else { return all }
+      return all.filter { subscribed.contains($0.path) || $0.role == .inbox || !$0.isSelectable }
+    }
     cache.saveFolders(folders, account: account.id)
     return folders
+  }
+
+  public func subscriptions() async throws -> [(path: String, subscribed: Bool)] {
+    try await perform { client in
+      let all = try await client.listFolders().filter(\.isSelectable)
+      let subscribed = try await client.subscribedPaths()
+      return all.map { ($0.path, subscribed.isEmpty || subscribed.contains($0.path)) }
+    }
+  }
+
+  public func setSubscribed(_ path: String, _ subscribed: Bool) async throws {
+    try await perform { try await $0.setSubscribed(path, subscribed) }
+  }
+
+  public func compact(_ path: String) async throws {
+    try await perform { try await $0.expungeFolder(path) }
+  }
+
+  public func forgetCache(_ path: String) {
+    cache.clearFolder(account: account.id, path: path)
   }
 
   private func delimiter() -> String {
@@ -169,12 +196,13 @@ public actor IMAPBackend: MailBackend {
     }
   }
 
-  public func move(uids: [UInt32], from source: String, to destination: String) async throws {
-    try await perform { try await $0.move(uids: uids, from: source, to: destination) }
+  public func move(uids: [UInt32], from source: String, to destination: String) async throws -> [UInt32: UInt32] {
+    let mapping = try await perform { try await $0.move(uids: uids, from: source, to: destination) }
     dropFromCache(uids: uids, path: source)
+    return mapping
   }
 
-  public func copy(uids: [UInt32], from source: String, to destination: String) async throws {
+  public func copy(uids: [UInt32], from source: String, to destination: String) async throws -> [UInt32: UInt32] {
     try await perform { try await $0.copy(uids: uids, from: source, to: destination) }
   }
 
@@ -247,7 +275,7 @@ public actor IMAPBackend: MailBackend {
 
 /// Sends mail for an identity, choosing SMTP or NNTP posting as appropriate.
 public enum MailSender {
-  public static func send(_ message: OutgoingMessage, account: MailAccount) async throws -> Data {
+  public static func send(_ message: OutgoingMessage, account: MailAccount, requestDSN: Bool = false) async throws -> Data {
     let messageID = OutgoingMessage.makeMessageID(domainOf: message.from.email.isEmpty ? account.email : message.from.email)
     let data = try message.render(messageID: messageID)
     if account.kind == .nntp {
@@ -260,7 +288,7 @@ public enum MailSender {
       ? nil : try await Credentials.resolve(account.outgoing, key: account.outgoingKeychainKey)
     if !message.allRecipients.isEmpty {
       try await SMTPClient(server: account.outgoing, credential: credential)
-        .send(data, from: message.from.email, to: message.allRecipients.map(\.email))
+        .send(data, from: message.from.email, to: message.allRecipients.map(\.email), requestDSN: requestDSN)
     }
     if !message.newsgroups.isEmpty {
       throw MailError.unsupported("Posting to newsgroups from a mail account")

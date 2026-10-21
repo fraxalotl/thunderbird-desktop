@@ -32,6 +32,31 @@ struct ComposeDraft: Codable, Hashable, Identifiable {
   var draftMessageID: String?
   var encrypt = false
   var sign = false
+  /// Editing a message in Templates: saving replaces the template instead of creating a draft.
+  var editingTemplate = false
+  var replyTo = ""
+  var followupTo = ""
+  var priority = 0
+  var requestReturnReceipt = false
+  var requestDSN = false
+  var sendFormat = SendFormat.automatic
+  var encryptSubject = true
+  var copyToFolder: FolderSelection?
+  var securityTechnology: SecurityTechnology?
+}
+
+/// Options › Sending format.
+enum SendFormat: String, Codable, CaseIterable {
+  case automatic, both, html, plain
+
+  var title: String {
+    switch self {
+    case .automatic: "Automatic"
+    case .both: "Both HTML and Plain Text"
+    case .html: "Only HTML"
+    case .plain: "Only Plain Text"
+    }
+  }
 }
 
 extension ComposeDraft {

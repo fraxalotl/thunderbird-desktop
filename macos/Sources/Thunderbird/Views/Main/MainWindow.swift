@@ -35,12 +35,13 @@ struct MainWindow: View {
   @Environment(ChatStore.self) private var chat
   @Environment(\.openWindow) private var openWindow
   @SceneStorage("space") private var space = AppSpace.mail
+  @AppStorage(MailPreferences.showSpacesToolbar) private var showSpaces = true
 
   var body: some View {
     @Bindable var mail = mail
     Group {
       switch space {
-      case .mail: MailSpace()
+      case .mail: MailSpace(space: $space)
       case .addressBook: AddressBookSpace()
       case .calendar: CalendarSpace()
       case .tasks: TasksSpace()
@@ -48,23 +49,17 @@ struct MainWindow: View {
       }
     }
     .toolbar {
-      ToolbarItem(placement: .navigation) {
-        Picker("Space", selection: $space) {
-          ForEach(AppSpace.allCases) { space in
-            Label(space.title, systemImage: space.symbol)
-              .labelStyle(.iconOnly)
-              .help(space.title)
-              .tag(space)
-          }
+      if space != .mail && showSpaces {
+        ToolbarItem(placement: .navigation) {
+          SpacesPicker(space: $space)
         }
-        .pickerStyle(.segmented)
-        .badge(chat.totalUnread)
       }
     }
+    .focusedSceneValue(\.spaceSelection, $space)
     .overlay(alignment: .bottom) {
       if let activity = mail.activity {
         ActivityPill(text: activity)
-          .padding(.bottom, 16)
+          .padding(.bottom, 28)
           .transition(.move(edge: .bottom).combined(with: .opacity))
       }
     }
@@ -82,6 +77,29 @@ struct MainWindow: View {
   }
 }
 
+/// Thunderbird's Spaces toolbar: Mail, Address Book, Calendar, Tasks and Chat.
+struct SpacesPicker: View {
+  @Binding var space: AppSpace
+  @Environment(ChatStore.self) private var chat
+
+  var body: some View {
+    Picker("Space", selection: $space) {
+      ForEach(AppSpace.allCases) { space in
+        Label(space.title, systemImage: space.symbol)
+          .labelStyle(.iconOnly)
+          .help(space.title)
+          .tag(space)
+      }
+    }
+    .pickerStyle(.segmented)
+    .badge(chat.totalUnread)
+  }
+}
+
+extension FocusedValues {
+  @Entry var spaceSelection: Binding<AppSpace>?
+}
+
 enum MailtoLink {
   static func address(_ url: URL) -> String {
     let address = url.absoluteString.dropFirst("mailto:".count).split(separator: "?").first.map(String.init) ?? ""
@@ -91,148 +109,345 @@ enum MailtoLink {
 
 struct MailSpace: View {
   @Environment(MailStore.self) private var store
+  @Environment(ContactsStore.self) private var contacts
+  @Environment(CalendarStore.self) private var calendar
   @Environment(\.openWindow) private var openWindow
+  @Environment(\.undoManager) private var undoManager
+  @Binding var space: AppSpace
   @AppStorage(Preferences.showTodayPane) private var showTodayPane = false
-  @State private var showingAccountSetup = false
-  @State private var showingSearch = false
-  @State private var showingSource = false
-  @State private var newFolderParent: FolderSelection?
-  @State private var reader = ReaderController()
+  @AppStorage(MailPreferences.layout) private var layout = PaneLayout.vertical
+  @AppStorage(MailPreferences.showFolderPane) private var showFolderPane = true
+  @AppStorage(MailPreferences.showMessagePane) private var showMessagePane = true
+  @AppStorage(MailPreferences.showStatusBar) private var showStatusBar = true
+  @AppStorage(MailPreferences.showSpacesToolbar) private var showSpaces = true
+  @AppStorage(MailPreferences.listStyle) private var listStyle = ListStyle.cards
+  @AppStorage(MailPreferences.fontScale) private var fontScale = 0
+  @State private var ui = MailUIState()
   @State private var columnVisibility = NavigationSplitViewVisibility.all
+  @FocusState private var searchFocused: Bool
 
   var body: some View {
     @Bindable var store = store
+    @Bindable var ui = ui
     Group {
       if !store.accounts.contains(where: { $0.kind != .local }) {
-        WelcomeView(onSetUp: { showingAccountSetup = true })
+        WelcomeView(onSetUp: { ui.present(.accountSetup) })
       } else {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-          FolderSidebar(
-            onAddAccount: { showingAccountSetup = true },
-            onNewFolder: { newFolderParent = $0 })
-            .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 380)
-        } content: {
-          MessageListView()
-            .navigationSplitViewColumnWidth(min: 320, ideal: 420)
-        } detail: {
-          MessageReaderView()
-        }
-        .searchable(text: $store.searchText, placement: .toolbar, prompt: "Quick Filter")
-        .toolbar { toolbar }
-        .inspector(isPresented: $showTodayPane) {
-          TodayPane()
-            .inspectorColumnWidth(min: 220, ideal: 260, max: 340)
-        }
+        panes
+          .searchable(text: $store.searchText, placement: .toolbar, prompt: "Search…")
+          .searchFocused($searchFocused)
+          .onSubmit(of: .search) {
+            let query = store.searchText
+            guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            Task { await store.search(SearchQuery(text: query, field: .all), scope: SearchScope(kind: .everything)) }
+          }
+          .toolbar(id: "mail") { toolbar }
+          .inspector(isPresented: $showTodayPane) {
+            TodayPane()
+              .inspectorColumnWidth(min: 220, ideal: 260, max: 340)
+          }
+          .safeAreaInset(edge: .bottom, spacing: 0) {
+            if showStatusBar { StatusBar() }
+          }
       }
     }
-    .environment(reader)
-    .focusedSceneValue(
-      \.mailSpaceActions,
-      MailSpaceActions(
-        newFolder: { newFolderParent = store.selectedFolder },
-        search: { showingSearch = true },
-        viewSource: { showingSource = true },
-        print: { reader.print() }))
-    .sheet(isPresented: $showingAccountSetup) {
-      AccountSetupView()
+    .environment(ui)
+    .environment(ui.reader)
+    .dynamicTypeSize(fontScale < 0 ? .small : fontScale == 0 ? .large : fontScale == 1 ? .xLarge : .xxLarge)
+    .focusedSceneValue(\.mailUI, ui)
+    .focusedSceneValue(\.focusSearch, { searchFocused = true })
+    .onAppear {
+      store.undoManager = undoManager
+      store.knownContactEmails = Set(contacts.contacts.flatMap { $0.emails.map { $0.value.lowercased() } })
     }
-    .sheet(isPresented: $showingSearch) {
-      SearchView()
+    .onChange(of: contacts.contacts.count) {
+      store.knownContactEmails = Set(contacts.contacts.flatMap { $0.emails.map { $0.value.lowercased() } })
     }
-    .sheet(isPresented: $showingSource) {
-      if let loaded = store.loadedMessage {
-        MessageSourceView(data: loaded.raw)
-      }
-    }
-    .sheet(item: $newFolderParent) { parent in
-      NewFolderSheet(parent: parent)
+    .onChange(of: showFolderPane, initial: true) { updateColumns() }
+    .onChange(of: showMessagePane) { updateColumns() }
+    .sheet(item: $ui.sheet) { sheet in
+      sheetView(sheet)
     }
   }
 
+  private func updateColumns() {
+    columnVisibility = showFolderPane ? .all : .doubleColumn
+  }
+
+  @ViewBuilder
+  private var panes: some View {
+    let sidebar = FolderSidebar(
+      onAddAccount: { ui.present(.accountSetup) },
+      onNewFolder: { ui.present(.newFolder($0)) })
+    switch layout {
+    case .vertical:
+      NavigationSplitView(columnVisibility: $columnVisibility) {
+        sidebar.navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 380)
+      } content: {
+        MessageListView()
+          .navigationSplitViewColumnWidth(min: 320, ideal: listStyle == .table ? 560 : 420)
+      } detail: {
+        if showMessagePane { MessageReaderView() } else { Color.clear }
+      }
+    case .classic:
+      NavigationSplitView(columnVisibility: $columnVisibility) {
+        sidebar.navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 380)
+      } detail: {
+        VSplitView {
+          MessageListView()
+            .frame(minHeight: 160, idealHeight: 300)
+          if showMessagePane {
+            MessageReaderView()
+              .frame(minHeight: 200)
+          }
+        }
+      }
+    case .wide:
+      VSplitView {
+        MessageListView()
+          .frame(minHeight: 160, idealHeight: 280)
+        HSplitView {
+          if showFolderPane {
+            sidebar.frame(minWidth: 200, idealWidth: 250, maxWidth: 380)
+          }
+          if showMessagePane {
+            MessageReaderView()
+              .frame(minWidth: 320)
+          }
+        }
+        .frame(minHeight: 200)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func sheetView(_ sheet: MailUIState.Sheet) -> some View {
+    switch sheet {
+    case .accountSetup: AccountSetupView()
+    case .search: SearchView()
+    case .source(let data): MessageSourceView(data: data)
+    case .newFolder(let parent): NewFolderSheet(parent: parent)
+    case .newSavedSearch: SearchView()
+    case .markReadByDate: MarkReadByDateSheet()
+    case .newTag: TagEditorSheet(tag: nil)
+    case .manageTags: ManageTagsSheet()
+    case .createFilter(let summary, let accountID): CreateFilterSheet(summary: summary, accountID: accountID)
+    case .redirect(let loaded): RedirectSheet(loaded: loaded)
+    case .imapSubscribe(let accountID): IMAPSubscribeView(accountID: accountID)
+    case .newsSubscribe(let accountID): NewsgroupSubscribeView(accountID: accountID)
+    case .folderProperties(let selection): FolderPropertiesView(selection: selection)
+    case .event(let draft): EventEditor(initial: draft)
+    case .moveTo: EmptyView()
+    }
+  }
+
+  private func compose(_ draft: ComposeDraft?) {
+    if let draft { openWindow(id: WindowID.compose, value: draft) }
+  }
+
+  /// Thunderbird's unified toolbar items (mail/components/unifiedtoolbar), customizable through
+  /// View › Toolbars › Customize….
   @ToolbarContentBuilder
-  private var toolbar: some ToolbarContent {
-    ToolbarItemGroup(placement: .navigation) {
+  private var toolbar: some CustomizableToolbarContent {
+    messageToolbarItems
+    navigationToolbarItems
+    folderToolbarItems
+    utilityToolbarItems
+  }
+
+  @ToolbarContentBuilder
+  private var messageToolbarItems: some CustomizableToolbarContent {
+    ToolbarItem(id: "spaces", placement: .navigation) {
+      if showSpaces { SpacesPicker(space: $space) }
+    }
+    ToolbarItem(id: "get-messages", placement: .navigation) {
       Button {
         Task { await store.refreshAll() }
       } label: {
         Label("Get Messages", systemImage: "arrow.down.circle")
       }
       .help("Get new messages for all accounts")
-      .disabled(!store.refreshing.isEmpty)
+      .disabled(!store.refreshing.isEmpty || store.isOffline)
     }
-
-    ToolbarItem(placement: .primaryAction) {
+    ToolbarItem(id: "write-message", placement: .primaryAction) {
       Button {
-        openWindow(id: WindowID.compose, value: store.newDraft())
+        compose(store.newDraft())
       } label: {
         Label("Write", systemImage: "square.and.pencil")
       }
       .help("Write a new message")
       .disabled(store.sendingAccounts.isEmpty)
     }
-
-    ToolbarSpacer(.fixed, placement: .primaryAction)
-
-    ToolbarItemGroup(placement: .primaryAction) {
-      Group {
-        Button {
-          if let draft = store.replyDraft(all: false) { openWindow(id: WindowID.compose, value: draft) }
-        } label: {
-          Label("Reply", systemImage: "arrowshape.turn.up.left")
-        }
+    ToolbarItem(id: "reply", placement: .primaryAction) {
+      Button { compose(store.replyDraft(.sender)) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
         .help("Reply to the sender")
-        Button {
-          if let draft = store.replyDraft(all: true) { openWindow(id: WindowID.compose, value: draft) }
-        } label: {
-          Label("Reply All", systemImage: "arrowshape.turn.up.left.2")
-        }
+        .disabled(store.loadedMessage == nil)
+    }
+    ToolbarItem(id: "reply-all", placement: .primaryAction) {
+      Button { compose(store.replyDraft(.all)) } label: { Label("Reply All", systemImage: "arrowshape.turn.up.left.2") }
         .help("Reply to everyone")
-        Button {
-          if let draft = store.forwardDraft() { openWindow(id: WindowID.compose, value: draft) }
-        } label: {
-          Label("Forward", systemImage: "arrowshape.turn.up.right")
-        }
+        .disabled(store.loadedMessage == nil)
+    }
+    ToolbarItem(id: "reply-to-list", placement: .primaryAction) {
+      Button { compose(store.replyDraft(.list)) } label: { Label("Reply to List", systemImage: "person.3") }
+        .disabled(!store.canReplyToList(store.loadedMessage))
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "forward-inline", placement: .primaryAction) {
+      Button { compose(store.forwardDraft(.inline)) } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
         .help("Forward this message")
+        .disabled(store.loadedMessage == nil)
+    }
+    ToolbarItem(id: "forward-attachment", placement: .primaryAction) {
+      Button { compose(store.forwardDraft(.attachment)) } label: {
+        Label("Forward as Attachment", systemImage: "paperclip.badge.ellipsis")
       }
       .disabled(store.loadedMessage == nil)
     }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "redirect", placement: .primaryAction) {
+      Button {
+        if let loaded = store.loadedMessage { ui.present(.redirect(loaded)) }
+      } label: {
+        Label("Redirect", systemImage: "arrowshape.bounce.right")
+      }
+      .disabled(store.loadedMessage == nil)
+    }
+    .defaultCustomization(.hidden)
+  }
 
-    ToolbarSpacer(.fixed, placement: .primaryAction)
-
-    ToolbarItemGroup(placement: .primaryAction) {
-      Group {
-        Button {
-          Task { await store.moveSelected(to: .archive) }
-        } label: {
-          Label("Archive", systemImage: "archivebox")
-        }
+  @ToolbarContentBuilder
+  private var navigationToolbarItems: some CustomizableToolbarContent {
+    ToolbarItem(id: "archive", placement: .primaryAction) {
+      Button { Task { await store.moveSelected(to: .archive) } } label: { Label("Archive", systemImage: "archivebox") }
         .help("Archive")
         .disabled(!store.canMoveSelection(to: .archive))
-        Button {
-          Task { await store.markJunk(true) }
-        } label: {
-          Label("Junk", systemImage: "xmark.bin")
-        }
-        .help("Mark as junk")
-        Button {
-          Task { await store.deleteSelected() }
-        } label: {
-          Label("Delete", systemImage: "trash")
-        }
+    }
+    ToolbarItem(id: "spam", placement: .primaryAction) {
+      Button { Task { await store.markJunk(true) } } label: { Label("Spam", systemImage: "xmark.bin") }
+        .help("Mark as spam")
+        .disabled(store.selection.isEmpty)
+    }
+    ToolbarItem(id: "delete", placement: .primaryAction) {
+      Button { Task { await store.deleteSelected() } } label: { Label("Delete", systemImage: "trash") }
         .help("Delete")
+        .disabled(store.selection.isEmpty)
+    }
+    ToolbarItem(id: "mark-as", placement: .primaryAction) {
+      Menu {
+        Button("As Read") { Task { await store.setFlag(MessageFlag.seen, on: true) } }
+        Button("As Unread") { Task { await store.setFlag(MessageFlag.seen, on: false) } }
+        Button("Thread As Read") { Task { await store.markThreadRead() } }
+        Button("All Read") { Task { await store.markAllRead() } }
+        Divider()
+        Button("Add Star") { Task { await store.setFlag(MessageFlag.flagged, on: true) } }
+      } label: {
+        Label("Mark", systemImage: "envelope.open")
       }
       .disabled(store.selection.isEmpty)
     }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "tag-message", placement: .primaryAction) {
+      TagMenu(store: store, ui: ui)
+        .labelStyle(.iconOnly)
+        .disabled(store.selection.isEmpty)
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "previous-unread", placement: .primaryAction) {
+      Button { store.navigate(.unread, forward: false) } label: { Label("Previous Unread", systemImage: "chevron.up.circle") }
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "next-unread", placement: .primaryAction) {
+      Button { store.navigate(.unread, forward: true) } label: { Label("Next Unread", systemImage: "chevron.down.circle") }
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "previous", placement: .primaryAction) {
+      Button { store.navigate(.message, forward: false) } label: { Label("Previous", systemImage: "chevron.up") }
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "next", placement: .primaryAction) {
+      Button { store.navigate(.message, forward: true) } label: { Label("Next", systemImage: "chevron.down") }
+    }
+    .defaultCustomization(.hidden)
+  }
 
-    ToolbarSpacer(.fixed, placement: .primaryAction)
-
-    ToolbarItemGroup(placement: .primaryAction) {
+  @ToolbarContentBuilder
+  private var folderToolbarItems: some CustomizableToolbarContent {
+    ToolbarItem(id: "conversation", placement: .primaryAction) {
       Button {
-        showingSearch = true
+        if let reference = store.selection.first { openWindow(id: WindowID.conversation, value: reference) }
       } label: {
-        Label("Search", systemImage: "text.magnifyingglass")
+        Label("Conversation", systemImage: "bubble.left.and.text.bubble.right")
       }
-      .help("Search messages (⇧⌘F)")
+      .disabled(store.selection.isEmpty)
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "move-to", placement: .primaryAction) {
+      FolderPickerMenu(title: "Move To", store: store) { destination in
+        Task { await store.transfer(Array(store.selection), to: destination, copy: false) }
+      }
+      .disabled(store.selection.isEmpty)
+    }
+    .defaultCustomization(.hidden)
+  }
+
+  @ToolbarContentBuilder
+  private var utilityToolbarItems: some CustomizableToolbarContent {
+    ToolbarItem(id: "folder-location", placement: .primaryAction) {
+      FolderPickerMenu(title: store.sourceTitle, store: store) { destination in store.source = .folder(destination) }
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "compact", placement: .primaryAction) {
+      Button {
+        if let folder = store.selectedFolder { Task { await store.compactFolder(folder) } }
+      } label: {
+        Label("Compact", systemImage: "arrow.down.right.and.arrow.up.left")
+      }
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "add-as-event", placement: .primaryAction) {
+      Button {
+        if let loaded = store.loadedMessage { ui.present(.event(calendar.eventDraft(from: loaded))) }
+      } label: {
+        Label("Add as Event", systemImage: "calendar.badge.plus")
+      }
+      .disabled(store.loadedMessage == nil)
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "add-as-task", placement: .primaryAction) {
+      Button {
+        if let loaded = store.loadedMessage { try? calendar.createTask(from: loaded) }
+      } label: {
+        Label("Add as Task", systemImage: "checklist")
+      }
+      .disabled(store.loadedMessage == nil)
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "address-book", placement: .primaryAction) {
+      Button { space = .addressBook } label: { Label("Address Book", systemImage: "person.crop.rectangle.stack") }
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "calendar", placement: .primaryAction) {
+      Button { space = .calendar } label: { Label("Calendar", systemImage: "calendar") }
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "chat", placement: .primaryAction) {
+      Button { space = .chat } label: { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "quick-filter", placement: .primaryAction) {
+      QuickFilterToggle()
+    }
+    ToolbarItem(id: "view-picker", placement: .primaryAction) {
+      Picker("View", selection: $listStyle) {
+        Label("Cards", systemImage: "rectangle.grid.1x2").tag(ListStyle.cards)
+        Label("Table", systemImage: "tablecells").tag(ListStyle.table)
+      }
+      .pickerStyle(.segmented)
+      .help("Cards or table view")
+    }
+    .defaultCustomization(.hidden)
+    ToolbarItem(id: "today-pane", placement: .primaryAction) {
       Button {
         showTodayPane.toggle()
       } label: {
@@ -243,8 +458,60 @@ struct MailSpace: View {
   }
 }
 
-extension FolderSelection: Identifiable {
-  var id: String { "\(accountID.uuidString)/\(path)" }
+private struct QuickFilterToggle: View {
+  @AppStorage(MailPreferences.showQuickFilter) private var showQuickFilter = true
+
+  var body: some View {
+    Toggle(isOn: $showQuickFilter) {
+      Label("Quick Filter", systemImage: "line.3.horizontal.decrease.circle")
+    }
+    .help("Quick Filter (⇧⌘K)")
+  }
+}
+
+/// View › Toolbars › Status Bar.
+private struct StatusBar: View {
+  @Environment(MailStore.self) private var store
+  @AppStorage(Preferences.showTodayPane) private var showTodayPane = false
+
+  var body: some View {
+    @Bindable var store = store
+    HStack(spacing: 12) {
+      Button {
+        store.isOffline.toggle()
+      } label: {
+        Image(systemName: store.isOffline ? "wifi.slash" : "wifi")
+          .foregroundStyle(store.isOffline ? .orange : .secondary)
+      }
+      .buttonStyle(.plain)
+      .help(store.isOffline ? "Thunderbird is offline. Click to go online." : "Thunderbird is online. Click to work offline.")
+      .accessibilityLabel(store.isOffline ? "Go online" : "Work offline")
+      Text(store.activity ?? (store.refreshing.isEmpty ? "Done" : "Checking for new messages…"))
+        .lineLimit(1)
+      Spacer()
+      if store.selection.count > 1 {
+        Text("Selected: \(store.selection.count)")
+      }
+      Text("Unread: \(store.items.filter { !$0.summary.isRead }.count)")
+      Text("Total: \(store.items.count)")
+      Button {
+        showTodayPane.toggle()
+      } label: {
+        Label("Today Pane", systemImage: showTodayPane ? "sidebar.right" : "calendar")
+          .labelStyle(.titleAndIcon)
+      }
+      .buttonStyle(.plain)
+    }
+    .font(.caption)
+    .foregroundStyle(.secondary)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 4)
+    .background(.bar)
+  }
+}
+
+extension FocusedValues {
+  @Entry var focusSearch: (() -> Void)?
 }
 
 struct ActivityPill: View {

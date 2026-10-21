@@ -9,6 +9,7 @@ import Observation
 import ThunderbirdCore
 import UniformTypeIdentifiers
 import UserNotifications
+import WebKit
 
 struct FolderSelection: Hashable, Codable {
   var accountID: UUID
@@ -20,12 +21,20 @@ enum MailboxSource: Hashable, Codable {
   case unified(FolderRole)
   case savedSearch(UUID)
   case searchResults
+  case tag(String)
 }
 
 struct MessageItem: Identifiable, Hashable {
   var reference: MessageReference
   var summary: MessageSummary
   var id: MessageReference { reference }
+}
+
+/// A folder and its subfolders, for the collapsible folder tree.
+struct FolderNode: Identifiable, Hashable {
+  var folder: RemoteFolder
+  var children: [FolderNode]?
+  var id: String { folder.path }
 }
 
 struct SidebarFolder: Identifiable, Hashable {
@@ -77,6 +86,12 @@ enum ReaderState {
   case failed(String)
 }
 
+struct ActivityEntry: Identifiable, Hashable {
+  let id = UUID()
+  var date: Date
+  var text: String
+}
+
 struct PresentedError: Identifiable {
   let id = UUID()
   var title: String
@@ -124,21 +139,68 @@ enum Preferences {
 final class MailStore {
   private(set) var accounts: [MailAccount] = []
   private(set) var folders: [UUID: [RemoteFolder]] = [:]
-  private(set) var items: [MessageItem] = []
+  var items: [MessageItem] = []
   private(set) var reader: ReaderState = .empty
   private(set) var refreshing: Set<UUID> = []
-  private(set) var activity: String?
+  var activity: String? {
+    didSet {
+      if let activity, activity != oldValue {
+        activityLog.insert(ActivityEntry(date: Date(), text: activity), at: 0)
+        if activityLog.count > 500 { activityLog.removeLast() }
+      }
+    }
+  }
+  /// Tools › Activity Manager.
+  var activityLog: [ActivityEntry] = []
   private(set) var accountErrors: [UUID: String] = [:]
   private(set) var savedSearches: [SavedSearch] = []
+  private(set) var favoriteFolders: [FolderSelection] =
+    (try? JSONDecoder().decode([FolderSelection].self, from: UserDefaults.standard.data(forKey: "favoriteFolders") ?? Data())) ?? []
+  private(set) var recentFolders: [FolderSelection] =
+    (try? JSONDecoder().decode([FolderSelection].self, from: UserDefaults.standard.data(forKey: "recentFolders") ?? Data())) ?? []
   var presentedError: PresentedError?
 
+  /// The toolbar's global search text.
   var searchText = ""
+  // Quick filter bar
+  var filterText = ""
+  var filterScopes: Set<QuickFilterScope> = [.sender, .recipients, .subject]
   var filterUnread = false
   var filterStarred = false
   var filterAttachments = false
+  var filterContact = false
+  var filterSticky = false
   var filterTag: String?
-  var threaded = UserDefaults.standard.bool(forKey: Preferences.threaded) {
-    didSet { UserDefaults.standard.set(threaded, forKey: Preferences.threaded) }
+  var knownContactEmails: Set<String> = []
+  var bodyMatches: Set<MessageReference>?
+  // View menu
+  var threadMode = ThreadMode(rawValue: UserDefaults.standard.string(forKey: Preferences.threaded) ?? "") ?? .unthreaded {
+    didSet { UserDefaults.standard.set(threadMode.rawValue, forKey: Preferences.threaded) }
+  }
+  var sortKey = SortKey(rawValue: UserDefaults.standard.string(forKey: "sortKey") ?? "") ?? .date {
+    didSet { UserDefaults.standard.set(sortKey.rawValue, forKey: "sortKey") }
+  }
+  var sortAscending = UserDefaults.standard.bool(forKey: "sortAscending") {
+    didSet { UserDefaults.standard.set(sortAscending, forKey: "sortAscending") }
+  }
+  var threadFilter = ThreadFilter.all
+  var expandedThreads: Set<MessageReference> = []
+  var pendingFeedSetup = false
+  var isOffline = UserDefaults.standard.bool(forKey: "workOffline") {
+    didSet { UserDefaults.standard.set(isOffline, forKey: "workOffline") }
+  }
+  var lastMoveTarget: (destination: FolderSelection, copy: Bool)?
+  @ObservationIgnored var undoManager: UndoManager?
+  @ObservationIgnored var history: [MessageReference] = []
+  @ObservationIgnored var historyIndex = -1
+  @ObservationIgnored var navigatingHistory = false
+  var viewFilter = MessageViewFilter.all
+  private(set) var ignoredThreads = Set(UserDefaults.standard.stringArray(forKey: "ignoredThreads") ?? [])
+  private(set) var watchedThreads = Set(UserDefaults.standard.stringArray(forKey: "watchedThreads") ?? [])
+
+  var threaded: Bool {
+    get { threadMode == .threaded }
+    set { threadMode = newValue ? .threaded : .unthreaded }
   }
 
   var source: MailboxSource? {
@@ -317,6 +379,7 @@ final class MailStore {
     case .unified(let role): "Unified \(role == .inbox ? "Inbox" : role.rawValue.capitalized)"
     case .savedSearch(let id): savedSearches.first { $0.id == id }?.name ?? "Saved Search"
     case .searchResults: "Search Results"
+    case .tag(let keyword): MessageTagStore.shared.tag(keyword)?.name ?? keyword
     case nil: "Thunderbird"
     }
   }
@@ -326,24 +389,6 @@ final class MailStore {
     selection.contains { reference in
       folder(role: role, in: reference.accountID).map { $0.path != reference.path } ?? false
     }
-  }
-
-  var filteredItems: [MessageItem] {
-    let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-    return items.filter { item in
-      let message = item.summary
-      if filterUnread && message.isRead { return false }
-      if filterStarred && !message.isFlagged { return false }
-      if filterAttachments && !message.hasAttachment { return false }
-      if let filterTag, !message.flags.contains(filterTag) { return false }
-      guard !query.isEmpty else { return true }
-      return SearchQuery(text: query, field: .headers).matches(message)
-    }
-  }
-
-  var isFiltering: Bool {
-    filterUnread || filterStarred || filterAttachments || filterTag != nil
-      || !searchText.trimmingCharacters(in: .whitespaces).isEmpty
   }
 
   var selectedItems: [MessageItem] {
@@ -396,7 +441,7 @@ final class MailStore {
   }
 
   func refresh(accountID: UUID) async {
-    guard let backend = backends[accountID], !refreshing.contains(accountID) else { return }
+    guard !isOffline, let backend = backends[accountID], !refreshing.contains(accountID) else { return }
     refreshing.insert(accountID)
     defer { refreshing.remove(accountID) }
     do {
@@ -464,7 +509,7 @@ final class MailStore {
       if self.source == current && items.isEmpty {
         applySync(cached, accountID: selection.accountID, path: selection.path)
       }
-      guard network else { return }
+      guard network, !isOffline else { return }
       activity = "Downloading messages…"
       defer { activity = nil }
       do {
@@ -493,7 +538,76 @@ final class MailStore {
       await runSearch(search.query, scope: search.scope, into: current)
     case .searchResults:
       break
+    case .tag(let keyword):
+      var found: [MessageItem] = []
+      for account in accounts {
+        guard let backend = backends[account.id] else { continue }
+        for folder in (folders[account.id] ?? []) where folder.isSelectable && folder.role != .trash {
+          for summary in await backend.cachedMessages(in: folder.path) where summary.flags.contains(keyword) {
+            found.append(
+              MessageItem(
+                reference: MessageReference(accountID: account.id, path: folder.path, uid: summary.uid), summary: summary))
+          }
+        }
+      }
+      guard self.source == current else { return }
+      items = found.sorted { $0.summary.date > $1.summary.date }
     }
+  }
+
+  func setIgnoredThreads(_ threads: Set<String>) {
+    ignoredThreads = threads
+    UserDefaults.standard.set(Array(threads), forKey: "ignoredThreads")
+  }
+
+  func setWatchedThreads(_ threads: Set<String>) {
+    watchedThreads = threads
+    UserDefaults.standard.set(Array(threads), forKey: "watchedThreads")
+  }
+
+  // MARK: - Favorite and recent folders
+
+  func isFavorite(_ folder: FolderSelection) -> Bool { favoriteFolders.contains(folder) }
+
+  func toggleFavorite(_ folder: FolderSelection) {
+    if let index = favoriteFolders.firstIndex(of: folder) {
+      favoriteFolders.remove(at: index)
+    } else {
+      favoriteFolders.append(folder)
+    }
+    UserDefaults.standard.set(try? JSONEncoder().encode(favoriteFolders), forKey: "favoriteFolders")
+  }
+
+  private func noteRecent(_ folder: FolderSelection) {
+    recentFolders.removeAll { $0 == folder }
+    recentFolders.insert(folder, at: 0)
+    recentFolders = Array(recentFolders.prefix(15))
+    UserDefaults.standard.set(try? JSONEncoder().encode(recentFolders), forKey: "recentFolders")
+  }
+
+  /// The account's folders as a tree: special folders first, then the user's hierarchy.
+  func folderTree(for accountID: UUID) -> [FolderNode] {
+    let flat = sidebarFolders(for: accountID)
+    var index = 0
+    func build(depth: Int) -> [FolderNode] {
+      var nodes: [FolderNode] = []
+      while index < flat.count, flat[index].depth >= depth {
+        guard flat[index].depth == depth else { break }
+        let folder = flat[index].folder
+        index += 1
+        let isSpecial = folder.role != .normal
+        let children = isSpecial ? [] : build(depth: depth + 1)
+        nodes.append(FolderNode(folder: folder, children: children.isEmpty ? nil : children))
+      }
+      return nodes
+    }
+    var roots: [FolderNode] = []
+    while index < flat.count {
+      let before = index
+      roots += build(depth: flat[index].depth)
+      if index == before { index += 1 }
+    }
+    return roots
   }
 
   private func sourceDidChange() {
@@ -501,7 +615,14 @@ final class MailStore {
     selection = []
     reader = .empty
     items = []
-    guard source != nil else { return }
+    bodyMatches = nil
+    if !filterSticky {
+      clearQuickFilter()
+    }
+    guard let source else { return }
+    if case .folder(let folder) = source {
+      noteRecent(folder)
+    }
     syncTask = Task { await reloadSource() }
   }
 
@@ -538,7 +659,7 @@ final class MailStore {
     for message in messages {
       var moved = false
       for action in FilterStore.actions(for: message, filters: filters) {
-        moved = await apply(action, to: message, accountID: accountID, path: inboxPath) || moved
+        moved = await applyFilterAction(action, to: message, accountID: accountID, path: inboxPath) || moved
         if moved { break }
       }
       if !moved, UserDefaults.standard.bool(forKey: Preferences.junkFilter), let junk = folder(role: .junk, in: accountID),
@@ -549,7 +670,7 @@ final class MailStore {
           subject: message.subject, from: message.from.first?.email ?? "", body: body)
         if let probability, probability > 0.95 {
           try? await backend.setFlags([MessageFlag.junk], on: true, uids: [message.uid], in: inboxPath)
-          try? await backend.move(uids: [message.uid], from: inboxPath, to: junk.path)
+          _ = try? await backend.move(uids: [message.uid], from: inboxPath, to: junk.path)
           moved = true
         }
       }
@@ -561,7 +682,7 @@ final class MailStore {
   }
 
   @discardableResult
-  private func apply(_ action: FilterAction, to message: MessageSummary, accountID: UUID, path: String) async -> Bool {
+  func applyFilterAction(_ action: FilterAction, to message: MessageSummary, accountID: UUID, path: String) async -> Bool {
     guard let backend = backends[accountID] else { return false }
     do {
       switch action.kind {
@@ -612,7 +733,7 @@ final class MailStore {
     defer { activity = nil }
     for item in items {
       for action in FilterStore.actions(for: item.summary, filters: filters) {
-        if await apply(action, to: item.summary, accountID: selection.accountID, path: selection.path) { break }
+        if await applyFilterAction(action, to: item.summary, accountID: selection.accountID, path: selection.path) { break }
       }
     }
     await reloadSource()
@@ -637,6 +758,13 @@ final class MailStore {
 
   private func selectionDidChange() {
     loadTask?.cancel()
+    if selection.count == 1, let reference = selection.first, !navigatingHistory {
+      if historyIndex < history.count - 1 { history.removeSubrange((historyIndex + 1)...) }
+      if history.last != reference {
+        history.append(reference)
+        historyIndex = history.count - 1
+      }
+    }
     switch selection.count {
     case 0:
       reader = .empty
@@ -697,9 +825,18 @@ final class MailStore {
       .map { ($0.key, $0.value.map(\.uid)) }
   }
 
-  func setFlag(_ flag: String, on: Bool, references: Set<MessageReference>? = nil) async {
+  func setFlag(_ flag: String, on: Bool, references: Set<MessageReference>? = nil, undoable: Bool = true) async {
     let targets = references ?? selection
     guard !targets.isEmpty else { return }
+    if undoable {
+      let name =
+        flag == MessageFlag.seen ? (on ? "Mark as Read" : "Mark as Unread")
+        : flag == MessageFlag.flagged ? (on ? "Add Star" : "Remove Star") : "Tag"
+      registerUndoPair(
+        name,
+        undo: { [weak self] in await self?.setFlag(flag, on: !on, references: targets, undoable: false) },
+        redo: { [weak self] in await self?.setFlag(flag, on: on, references: targets, undoable: false) })
+    }
     var unseenDelta: [FolderSelection: Int] = [:]
     for index in items.indices where targets.contains(items[index].reference) {
       let had = items[index].summary.flags.contains(flag)
@@ -763,7 +900,8 @@ final class MailStore {
       guard let backend = backends[folder.accountID] else { continue }
       do {
         if !permanently, let trash = self.folder(role: .trash, in: folder.accountID), trash.path != folder.path {
-          try await backend.move(uids: uids, from: folder.path, to: trash.path)
+          let mapping = try await backend.move(uids: uids, from: folder.path, to: trash.path)
+          registerMoveUndo("Delete", mapping: mapping, from: folder, to: FolderSelection(accountID: folder.accountID, path: trash.path))
         } else {
           try await backend.delete(uids: uids, in: folder.path)
         }
@@ -785,7 +923,10 @@ final class MailStore {
     for (folder, uids) in grouped(targets) {
       guard let destination = self.folder(role: role, in: folder.accountID), destination.path != folder.path else { continue }
       do {
-        try await backends[folder.accountID]?.move(uids: uids, from: folder.path, to: destination.path)
+        let mapping = try await backends[folder.accountID]?.move(uids: uids, from: folder.path, to: destination.path) ?? [:]
+        registerMoveUndo(
+          role == .archive ? "Archive" : role == .junk ? "Mark as Spam" : "Move", mapping: mapping, from: folder,
+          to: FolderSelection(accountID: folder.accountID, path: destination.path))
       } catch {
         report(error, title: "Couldn't move the message")
       }
@@ -794,6 +935,7 @@ final class MailStore {
 
   /// Moves or copies messages to any folder, including across accounts.
   func transfer(_ references: [MessageReference], to destination: FolderSelection, copy: Bool) async {
+    lastMoveTarget = (destination, copy)
     let targets = Set(references)
     if !copy {
       removeFromList(targets.filter { FolderSelection(accountID: $0.accountID, path: $0.path) != destination })
@@ -807,7 +949,8 @@ final class MailStore {
           if copy {
             try await source.copy(uids: uids, from: folder.path, to: destination.path)
           } else {
-            try await source.move(uids: uids, from: folder.path, to: destination.path)
+            let mapping = try await source.move(uids: uids, from: folder.path, to: destination.path)
+            registerMoveUndo("Move", mapping: mapping, from: folder, to: destination)
           }
         } else {
           let flags = Dictionary(
@@ -907,6 +1050,44 @@ final class MailStore {
       }
     } catch {
       report(error, title: "Couldn't empty the folder")
+    }
+  }
+
+  func compactFolder(_ selection: FolderSelection) async {
+    do {
+      try await backends[selection.accountID]?.compact(selection.path)
+    } catch {
+      report(error, title: "Couldn't compact the folder")
+    }
+  }
+
+  func compactAllFolders() async {
+    activity = "Compacting folders…"
+    defer { activity = nil }
+    for account in accounts {
+      for folder in (folders[account.id] ?? []) where folder.isSelectable {
+        try? await backends[account.id]?.compact(folder.path)
+      }
+    }
+  }
+
+  /// Thunderbird's "Repair Folder": throw away the local summary and download it again.
+  func repairFolder(_ selection: FolderSelection) async {
+    await backends[selection.accountID]?.forgetCache(selection.path)
+    if source == .folder(selection) {
+      items = []
+      await reloadSource()
+    }
+  }
+
+  func setSubscribed(_ path: String, _ subscribed: Bool, accountID: UUID) async {
+    do {
+      try await backends[accountID]?.setSubscribed(path, subscribed)
+      if let backend = backends[accountID] {
+        folders[accountID] = try await backend.refreshFolders()
+      }
+    } catch {
+      report(error, title: "Couldn't change the subscription")
     }
   }
 
@@ -1031,15 +1212,31 @@ final class MailStore {
           mimeType: UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream",
           data: try Data(contentsOf: url))
       })
-    message.htmlBody = draft.isHTML ? draft.htmlBody : nil
+    if draft.isHTML, let html = draft.htmlBody {
+      let (rewritten, images) = Self.extractInlineImages(html, domain: identity.email)
+      message.htmlBody = forDraft ? html : rewritten
+      message.inlineImages = forDraft ? [] : images
+    }
+    switch draft.sendFormat {
+    case .plain: message.plainTextOnly = true
+    case .html: message.htmlOnly = draft.isHTML
+    case .automatic, .both: break
+    }
     message.newsgroups = draft.newsgroups.split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init)
-    message.replyTo = MailAddress.parseList(identity.replyTo)
+    let replyTo = MailAddress.parseList(draft.replyTo)
+    message.replyTo = replyTo.isEmpty ? MailAddress.parseList(identity.replyTo) : replyTo
+    if !draft.followupTo.isEmpty {
+      message.extraHeaders.append(HeaderField(name: "Followup-To", value: draft.followupTo))
+    }
+    message.priority = draft.priority
+    message.requestReturnReceipt = draft.requestReturnReceipt
     message.includeBccHeader = forDraft
     if !forDraft && (draft.encrypt || draft.sign) {
       message.security = OutgoingSecurity(
-        technology: account.securityTechnology, sign: draft.sign, encrypt: draft.encrypt,
+        technology: draft.securityTechnology ?? account.securityTechnology, sign: draft.sign, encrypt: draft.encrypt,
         signerKey: account.openPGPKeyID)
       message.protector = MessageSecurity()
+      message.encryptSubject = draft.encryptSubject
     }
     if forDraft {
       message.extraHeaders.append(HeaderField(name: "X-Thunderbird-Account", value: account.id.uuidString))
@@ -1052,7 +1249,7 @@ final class MailStore {
     guard !message.allRecipients.isEmpty || !message.newsgroups.isEmpty else { throw MailError.invalidRecipients }
     activity = "Sending message…"
     defer { activity = nil }
-    let rendered = try await MailSender.send(message, account: account)
+    let rendered = try await MailSender.send(message, account: account, requestDSN: draft.requestDSN)
     onAddressesUsed?(message.allRecipients)
     await afterSending(draft, account: account, rendered: rendered)
   }
@@ -1060,7 +1257,8 @@ final class MailStore {
   private func afterSending(_ draft: ComposeDraft, account: MailAccount, rendered: Data) async {
     let host = account.outgoing.host.lowercased()
     let serverSavesSent = host.hasSuffix("gmail.com") || host.hasSuffix("googlemail.com")
-    let sentTarget = folder(role: .sent, in: account.id).map { (account.id, $0.path) }
+    let sentTarget =
+      draft.copyToFolder.map { ($0.accountID, $0.path) } ?? folder(role: .sent, in: account.id).map { (account.id, $0.path) }
     if !serverSavesSent, account.kind != .nntp, let (accountID, path) = sentTarget {
       try? await backends[accountID]?.append(rendered, to: path, flags: [MessageFlag.seen])
     }
@@ -1080,9 +1278,39 @@ final class MailStore {
     }
   }
 
+  /// Turns data: URL images in composed HTML into cid: references with matching inline parts.
+  static func extractInlineImages(_ html: String, domain email: String) -> (String, [InlineImage]) {
+    let pattern = #"src\s*=\s*"data:([a-zA-Z0-9.+/-]+);base64,([A-Za-z0-9+/=\s]+)""#
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return (html, []) }
+    var images: [InlineImage] = []
+    var output = html
+    let domain = email.split(separator: "@").last.map(String.init) ?? "localhost"
+    for match in regex.matches(in: html, range: NSRange(html.startIndex..., in: html)).reversed() {
+      guard let whole = Range(match.range, in: html), let typeRange = Range(match.range(at: 1), in: html),
+        let dataRange = Range(match.range(at: 2), in: html),
+        let data = Data(base64Encoded: String(html[dataRange]), options: .ignoreUnknownCharacters)
+      else { continue }
+      let contentID = "part\(images.count + 1).\(UUID().uuidString.prefix(8))@\(domain)"
+      images.append(InlineImage(contentID: contentID, mimeType: String(html[typeRange]), data: data))
+      if let outputRange = output.range(of: String(html[whole])) {
+        output.replaceSubrange(outputRange, with: "src=\"cid:\(contentID)\"")
+      }
+    }
+    return (output, images)
+  }
+
+  /// File › Save As › File… from the composer.
+  func renderForFile(_ draft: ComposeDraft) throws -> Data {
+    let (account, message) = try outgoingMessage(draft, forDraft: false)
+    var plain = message
+    plain.security = nil
+    return try plain.render(messageID: OutgoingMessage.makeMessageID(domainOf: account.email))
+  }
+
   /// Saves the draft to the account's Drafts folder, replacing the previous copy. Returns the draft's Message-ID.
   @discardableResult
-  func saveDraft(_ draft: ComposeDraft, asTemplate: Bool = false) async throws -> String {
+  func saveDraft(_ draft: ComposeDraft, asTemplate requestedTemplate: Bool = false) async throws -> String {
+    let asTemplate = requestedTemplate || draft.editingTemplate
     let (account, message) = try outgoingMessage(draft, forDraft: true)
     let role: FolderRole = asTemplate ? .templates : .drafts
     let target = try await ensureFolder(role, in: account)
@@ -1093,6 +1321,9 @@ final class MailStore {
     try await backend.append(data, to: target.path, flags: [MessageFlag.seen, MessageFlag.draft])
     if !previous.isEmpty {
       try? await backend.delete(uids: previous, in: target.path)
+    }
+    if draft.editingTemplate, let template = draft.savedDraft {
+      try? await backends[template.accountID]?.delete(uids: [template.uid], in: template.path)
     }
     if source == .folder(target) {
       await reloadSource()
@@ -1282,8 +1513,25 @@ final class MailStore {
   /// Subscribes to or unsubscribes from a newsgroup.
   func setNewsgroup(_ name: String, subscribed: Bool, accountID: UUID) async {
     guard let backend = backends[accountID] as? NNTPBackend else { return }
-    await backend.setSubscribed(name, subscribed)
+    await backend.updateSubscription(name, subscribed)
     folders[accountID] = await backend.cachedFolders()
+  }
+
+  /// Tools › Clear Recent History…
+  func clearRecentHistory() {
+    let alert = NSAlert()
+    alert.messageText = "Clear Recent History"
+    alert.informativeText = "This clears recent folders, Back/Forward history, the activity log and cached web content."
+    alert.addButton(withTitle: "Clear Now")
+    alert.addButton(withTitle: "Cancel")
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+    recentFolders = []
+    UserDefaults.standard.removeObject(forKey: "recentFolders")
+    history = []
+    historyIndex = -1
+    activityLog = []
+    WKWebsiteDataStore.default().removeData(
+      ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
   }
 
   // MARK: - Errors

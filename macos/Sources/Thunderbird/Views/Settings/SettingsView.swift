@@ -8,21 +8,23 @@ import ThunderbirdCore
 import UniformTypeIdentifiers
 
 struct SettingsView: View {
+  @AppStorage("settingsTab") private var tab = "general"
+
   var body: some View {
-    TabView {
-      Tab("General", systemImage: "gearshape") {
+    TabView(selection: $tab) {
+      Tab("General", systemImage: "gearshape", value: "general") {
         GeneralSettings()
       }
-      Tab("Accounts", systemImage: "at") {
+      Tab("Accounts", systemImage: "at", value: "accounts") {
         AccountsSettings()
       }
-      Tab("Filters", systemImage: "line.3.horizontal.decrease.circle") {
+      Tab("Filters", systemImage: "line.3.horizontal.decrease.circle", value: "filters") {
         FilterSettings()
       }
-      Tab("Encryption", systemImage: "key") {
+      Tab("Encryption", systemImage: "key", value: "encryption") {
         OpenPGPSettings()
       }
-      Tab("OAuth", systemImage: "person.badge.key") {
+      Tab("OAuth", systemImage: "person.badge.key", value: "oauth") {
         OAuthSettings()
       }
     }
@@ -403,7 +405,7 @@ private struct FilterSettings: View {
   }
 }
 
-private struct FilterEditor: View {
+struct FilterEditor: View {
   @Binding var filter: MessageFilter
   let folders: [RemoteFolder]
 

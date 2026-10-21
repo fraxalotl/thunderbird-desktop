@@ -403,6 +403,15 @@ public final class OpenPGP: @unchecked Sendable {
     saveKeyrings()
   }
 
+  /// Looks a key up on keys.openpgp.org (VKS), as Thunderbird's Key Assistant does, and imports it.
+  public func discoverKey(for email: String) async throws -> Int {
+    let encoded = email.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? email
+    guard let url = URL(string: "https://keys.openpgp.org/vks/v1/by-email/\(encoded)") else { return 0 }
+    let (data, response) = try await URLSession.shared.data(from: url)
+    guard (response as? HTTPURLResponse)?.statusCode == 200 else { return 0 }
+    return try importKeys(data)
+  }
+
   // MARK: - Operations
 
   public func encrypt(_ data: Data, to recipients: [String], signWith signer: String?) throws -> Data {

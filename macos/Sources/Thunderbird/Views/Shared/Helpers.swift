@@ -27,6 +27,18 @@ enum AttachmentFiles {
     }
   }
 
+  /// Tools › Saved Files: attachments the user has saved.
+  static var savedFiles: [URL] {
+    (UserDefaults.standard.stringArray(forKey: "savedFiles") ?? []).map { URL(filePath: $0) }
+  }
+
+  static func recordSaved(_ url: URL) {
+    var list = UserDefaults.standard.stringArray(forKey: "savedFiles") ?? []
+    list.removeAll { $0 == url.path }
+    list.insert(url.path, at: 0)
+    UserDefaults.standard.set(Array(list.prefix(200)), forKey: "savedFiles")
+  }
+
   @MainActor
   static func save(_ attachments: [MessageAttachment]) {
     if attachments.count == 1, let attachment = attachments.first {
@@ -34,6 +46,7 @@ enum AttachmentFiles {
       panel.nameFieldStringValue = attachment.filename
       if panel.runModal() == .OK, let url = panel.url {
         try? attachment.data.write(to: url)
+        recordSaved(url)
       }
       return
     }
@@ -44,7 +57,9 @@ enum AttachmentFiles {
     panel.prompt = "Save Attachments"
     guard panel.runModal() == .OK, let folder = panel.url else { return }
     for attachment in attachments {
-      try? attachment.data.write(to: folder.appending(path: attachment.filename))
+      let url = folder.appending(path: attachment.filename)
+      try? attachment.data.write(to: url)
+      recordSaved(url)
     }
   }
 

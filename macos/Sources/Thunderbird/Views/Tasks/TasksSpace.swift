@@ -8,8 +8,8 @@ import ThunderbirdCore
 
 struct TasksSpace: View {
   @Environment(CalendarStore.self) private var calendar
-  @State private var selection: String?
   @State private var newTitle = ""
+  @FocusState private var addFocused: Bool
 
   var body: some View {
     @Bindable var calendar = calendar
@@ -41,7 +41,7 @@ struct TasksSpace: View {
         .listStyle(.sidebar)
         .navigationSplitViewColumnWidth(min: 200, ideal: 230)
       } content: {
-        List(calendar.reminders, id: \.calendarItemIdentifier, selection: $selection) { reminder in
+        List(calendar.reminders, id: \.calendarItemIdentifier, selection: $calendar.selectedTaskID) { reminder in
           TaskRow(reminder: reminder)
             .tag(reminder.calendarItemIdentifier)
         }
@@ -57,6 +57,7 @@ struct TasksSpace: View {
               .foregroundStyle(.tint)
             TextField("Add a task", text: $newTitle)
               .textFieldStyle(.plain)
+              .focused($addFocused)
               .onSubmit(addTask)
           }
           .padding(.horizontal, 14)
@@ -66,7 +67,7 @@ struct TasksSpace: View {
         }
         .navigationSplitViewColumnWidth(min: 300, ideal: 380)
       } detail: {
-        if let selection, let reminder = calendar.reminders.first(where: { $0.calendarItemIdentifier == selection }) {
+        if let selection = calendar.selectedTaskID, let reminder = calendar.reminders.first(where: { $0.calendarItemIdentifier == selection }) {
           TaskEditor(initial: calendar.taskDraft(for: reminder))
             .id(selection)
         } else {
@@ -74,6 +75,12 @@ struct TasksSpace: View {
         }
       }
       .navigationTitle("Tasks")
+      .onChange(of: calendar.pendingTask, initial: true) {
+        if calendar.pendingTask {
+          addFocused = true
+          calendar.pendingTask = false
+        }
+      }
     }
   }
 

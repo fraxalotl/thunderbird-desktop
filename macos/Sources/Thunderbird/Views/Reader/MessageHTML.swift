@@ -14,7 +14,54 @@ enum MessageHTML {
     var hasRemoteContent: Bool
   }
 
-  static func render(_ message: ParsedMessage, allowRemote: Bool) -> Rendered {
+  static func render(
+    _ message: ParsedMessage, allowRemote: Bool, mode: BodyMode = .original, inlineAttachments: Bool = false
+  ) -> Rendered {
+    var rendered = renderBody(message, allowRemote: allowRemote, mode: mode)
+    var extra = ""
+    if mode == .allParts {
+      for attachment in message.attachments where attachment.mimeType.hasPrefix("text/") && attachment.mimeType != "text/calendar" {
+        extra += "<hr><p style=\"color:gray\">\(escape(attachment.filename))</p><pre style=\"white-space:pre-wrap\">"
+          + escape(MIMEDecoder.string(from: attachment.data, charset: nil)) + "</pre>"
+      }
+    }
+    if inlineAttachments {
+      for attachment in message.attachments where attachment.mimeType.hasPrefix("image/") && attachment.data.count < 15_000_000 {
+        extra += "<hr><p style=\"color:gray;font:12px -apple-system\">\(escape(attachment.filename))</p>"
+          + "<img style=\"max-width:100%\" src=\"data:\(attachment.mimeType);base64,\(attachment.data.base64EncodedString())\">"
+      }
+    }
+    if !extra.isEmpty {
+      rendered.html += rendered.isPlainText ? extra : "<div>\(extra)</div>"
+    }
+    return rendered
+  }
+
+  /// Simple HTML: Thunderbird's "View › Message Body As › Simple HTML" drops styling, scripts and
+  /// remote resources while keeping structure.
+  static func simplified(_ html: String) -> String {
+    var output = html
+    for pattern in [
+      #"(?is)<(script|style|head|title|object|embed|iframe)\b.*?</\1>"#, #"(?is)<(link|meta|base)\b[^>]*>"#,
+      #"(?i)\s(style|class|bgcolor|background|color|face|size|width|height)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)"#,
+      #"(?is)<img\b[^>]*\bsrc\s*=\s*["']?https?:[^>]*>"#,
+    ] {
+      output = output.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+    }
+    return output
+  }
+
+  private static func renderBody(_ message: ParsedMessage, allowRemote: Bool, mode: BodyMode) -> Rendered {
+    var message = message
+    switch mode {
+    case .plain:
+      if message.textBody == nil { message.textBody = message.plainText }
+      message.htmlBody = nil
+    case .simple:
+      message.htmlBody = message.htmlBody.map(simplified)
+    case .original, .allParts:
+      break
+    }
     let policy =
       allowRemote
       ? "default-src 'none'; img-src * data:; style-src * 'unsafe-inline' data:; font-src * data:; media-src *"

@@ -193,6 +193,12 @@ public struct MessageSummary: Codable, Sendable, Hashable, Identifiable {
   public var inReplyTo: String?
   public var hasAttachment: Bool
   public var references: [String]
+  /// X-Priority, 1 (highest) to 5 (lowest); 0 when the message doesn't say.
+  public var priority: Int = 0
+  /// When the server received the message (IMAP INTERNALDATE), if known.
+  public var received: Date?
+  /// The List-Post address, for Reply to List.
+  public var listPost: String?
 
   public var id: UInt32 { uid }
 
@@ -236,6 +242,26 @@ public struct MessageSummary: Codable, Sendable, Hashable, Identifiable {
     inReplyTo = try c.decodeIfPresent(String.self, forKey: .inReplyTo)
     hasAttachment = try c.decode(Bool.self, forKey: .hasAttachment)
     references = try c.decodeIfPresent([String].self, forKey: .references) ?? []
+    priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 0
+    received = try c.decodeIfPresent(Date.self, forKey: .received)
+    listPost = try c.decodeIfPresent(String.self, forKey: .listPost)
+  }
+
+  static func parsePriority(_ value: String?) -> Int {
+    guard let value = value?.trimmingCharacters(in: .whitespaces).lowercased(), !value.isEmpty else { return 0 }
+    if let digit = value.first?.wholeNumberValue { return min(5, max(1, digit)) }
+    if value.contains("highest") { return 1 }
+    if value.contains("high") || value.contains("urgent") { return 2 }
+    if value.contains("lowest") { return 5 }
+    if value.contains("low") { return 4 }
+    return 3
+  }
+
+  static func parseListPost(_ value: String?) -> String? {
+    guard let value, let start = value.range(of: "<mailto:", options: .caseInsensitive),
+      let end = value[start.upperBound...].firstIndex(of: ">")
+    else { return nil }
+    return String(value[start.upperBound..<end]).components(separatedBy: "?").first
   }
 
   /// Builds a summary from a raw message, for stores that keep whole messages locally.
@@ -256,6 +282,8 @@ public struct MessageSummary: Codable, Sendable, Hashable, Identifiable {
       hasAttachment: contentType.contains("multipart/mixed"),
       references: MessageSummary.parseReferences(headers["References"])
     )
+    priority = Self.parsePriority(headers["X-Priority"] ?? headers["Importance"])
+    listPost = Self.parseListPost(headers["List-Post"])
   }
 
   public static func parseReferences(_ value: String?) -> [String] {

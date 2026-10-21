@@ -102,6 +102,21 @@ struct ChatSpace: View {
     .sheet(isPresented: $addingAccount) {
       ChatAccountSetup()
     }
+    .sheet(isPresented: Binding(get: { chat.pendingAddContact }, set: { chat.pendingAddContact = $0 })) {
+      AddChatContactSheet()
+    }
+    .onChange(of: chat.pendingAccountSetup, initial: true) {
+      if chat.pendingAccountSetup {
+        addingAccount = true
+        chat.pendingAccountSetup = false
+      }
+    }
+    .onChange(of: chat.pendingJoin, initial: true) {
+      if chat.pendingJoin {
+        joiningAccount = chat.selection?.accountID ?? chat.accounts.first?.id
+        chat.pendingJoin = false
+      }
+    }
     .sheet(item: $joiningAccount) { accountID in
       JoinChatSheet(accountID: accountID)
     }
@@ -386,5 +401,39 @@ struct ChatAccountSetup: View {
     } catch {
       self.error = error.localizedDescription
     }
+  }
+}
+
+/// File › New › Chat Contact…
+private struct AddChatContactSheet: View {
+  @Environment(ChatStore.self) private var chat
+  @Environment(\.dismiss) private var dismiss
+  @State private var accountID: UUID?
+  @State private var name = ""
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      Text("Add Contact")
+        .font(.title3.weight(.semibold))
+      Picker("Account", selection: $accountID) {
+        ForEach(chat.accounts) { Text("\($0.chatProtocol.label) · \($0.title)").tag(Optional($0.id)) }
+      }
+      TextField("Username, @user:server or user@server", text: $name)
+        .textFieldStyle(.roundedBorder)
+      HStack {
+        Spacer()
+        Button("Cancel", role: .cancel) { dismiss() }
+        Button("Add Contact") {
+          if let accountID { Task { await chat.addContact(name, accountID: accountID) } }
+          dismiss()
+        }
+        .buttonStyle(.glassProminent)
+        .keyboardShortcut(.defaultAction)
+        .disabled(name.isEmpty || accountID == nil)
+      }
+    }
+    .padding(22)
+    .frame(width: 420)
+    .onAppear { accountID = accountID ?? chat.accounts.first?.id }
   }
 }

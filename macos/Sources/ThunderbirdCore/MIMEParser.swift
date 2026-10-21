@@ -278,6 +278,13 @@ public struct MessageAttachment: Sendable, Identifiable, Hashable {
   public var data: Data
 
   public var size: Int { data.count }
+
+  public init(id: Int, filename: String, mimeType: String, data: Data) {
+    self.id = id
+    self.filename = filename
+    self.mimeType = mimeType
+    self.data = data
+  }
 }
 
 /// A fully parsed message, ready to display.

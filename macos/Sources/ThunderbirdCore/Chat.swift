@@ -113,6 +113,13 @@ public protocol ChatConnection: Sendable {
   func join(_ name: String) async throws
   func leave(_ conversationID: String) async throws
   func disconnect() async
+  func addContact(_ name: String) async throws
+  func setAway(_ away: Bool) async throws
+}
+
+extension ChatConnection {
+  public func addContact(_ name: String) async throws {}
+  public func setAway(_ away: Bool) async throws {}
 }
 
 public enum ChatClients {
@@ -336,6 +343,14 @@ public actor IRCClient: ChatConnection {
     }
   }
 
+  public func setAway(_ away: Bool) async throws {
+    try await write(away ? "AWAY :Away" : "AWAY")
+  }
+
+  public func addContact(_ name: String) async throws {
+    continuation.yield(.conversation(ChatConversation(id: name, title: name, isGroup: false)))
+  }
+
   public func join(_ name: String) async throws {
     let channel = name.hasPrefix("#") || name.hasPrefix("&") ? name : "#\(name)"
     try await write("JOIN \(channel)")
@@ -536,6 +551,16 @@ public actor MatrixClient: ChatConnection {
     }
     let room = conversationID.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? conversationID
     _ = try await request("PUT", "_matrix/client/v3/rooms/\(room)/send/m.room.message/\(UUID().uuidString)", body: body)
+  }
+
+  public func setAway(_ away: Bool) async throws {
+    let user = userID.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? userID
+    _ = try await request("PUT", "_matrix/client/v3/presence/\(user)/status", body: ["presence": away ? "unavailable" : "online"])
+  }
+
+  /// Starts a direct conversation by creating a room and inviting the user.
+  public func addContact(_ name: String) async throws {
+    _ = try await request("POST", "_matrix/client/v3/createRoom", body: ["is_direct": true, "invite": [name], "preset": "trusted_private_chat"])
   }
 
   public func join(_ name: String) async throws {
@@ -811,6 +836,18 @@ public actor XMPPClient: ChatConnection {
       continuation.yield(
         .message(ChatMessage(conversationID: conversationID, sender: localpart, text: text, isOutgoing: true)))
     }
+  }
+
+  public func setAway(_ away: Bool) async throws {
+    try await send(raw: away ? "<presence><show>away</show></presence>" : "<presence/>")
+  }
+
+  /// Adds the contact to the roster and asks to see their presence.
+  public func addContact(_ name: String) async throws {
+    let jid = Self.escape(Self.bare(name))
+    try await send(raw: "<iq type='set' id='\(UUID().uuidString)'><query xmlns='jabber:iq:roster'><item jid='\(jid)'/></query></iq>")
+    try await send(raw: "<presence to='\(jid)' type='subscribe'/>")
+    continuation.yield(.conversation(ChatConversation(id: Self.bare(name), title: Self.bare(name), isGroup: false)))
   }
 
   public func join(_ name: String) async throws {

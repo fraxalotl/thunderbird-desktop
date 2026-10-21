@@ -87,8 +87,9 @@ public protocol MailBackend: Sendable {
   func sync(path: String, limit: Int) async throws -> SyncResult
   func message(uid: UInt32, in path: String) async throws -> Data
   func setFlags(_ flags: [String], on: Bool, uids: [UInt32], in path: String) async throws
-  func move(uids: [UInt32], from source: String, to destination: String) async throws
-  func copy(uids: [UInt32], from source: String, to destination: String) async throws
+  /// Returns the destination UID for each moved message, when it is known.
+  @discardableResult func move(uids: [UInt32], from source: String, to destination: String) async throws -> [UInt32: UInt32]
+  @discardableResult func copy(uids: [UInt32], from source: String, to destination: String) async throws -> [UInt32: UInt32]
   func delete(uids: [UInt32], in path: String) async throws
   func emptyFolder(_ path: String) async throws
   func append(_ message: Data, to path: String, flags: [String]) async throws
@@ -98,11 +99,19 @@ public protocol MailBackend: Sendable {
   func renameFolder(_ path: String, to name: String) async throws
   func deleteFolder(_ path: String) async throws
   func waitForNewMail() async throws -> Bool
+  func compact(_ path: String) async throws
+  func subscriptions() async throws -> [(path: String, subscribed: Bool)]
+  func setSubscribed(_ path: String, _ subscribed: Bool) async throws
+  func forgetCache(_ path: String) async
   func disconnect() async
 }
 
 extension MailBackend {
   public func waitForNewMail() async throws -> Bool { false }
+  public func compact(_ path: String) async throws {}
+  public func subscriptions() async throws -> [(path: String, subscribed: Bool)] { [] }
+  public func setSubscribed(_ path: String, _ subscribed: Bool) async throws {}
+  public func forgetCache(_ path: String) async {}
 }
 
 /// Serialises async operations on an actor, which otherwise interleave at each suspension point.

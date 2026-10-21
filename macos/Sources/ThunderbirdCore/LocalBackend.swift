@@ -147,17 +147,20 @@ public actor LocalBackend: MailBackend {
     saveIndex(index, path)
   }
 
-  public func copy(uids: [UInt32], from source: String, to destination: String) async throws {
+  public func copy(uids: [UInt32], from source: String, to destination: String) async throws -> [UInt32: UInt32] {
     let index = loadIndex(source)
+    var mapping: [UInt32: UInt32] = [:]
     for summary in index.messages where uids.contains(summary.uid) {
       let data = try await message(uid: summary.uid, in: source)
-      deliver(data, to: destination, flags: summary.flags)
+      mapping[summary.uid] = deliver(data, to: destination, flags: summary.flags).uid
     }
+    return mapping
   }
 
-  public func move(uids: [UInt32], from source: String, to destination: String) async throws {
-    try await copy(uids: uids, from: source, to: destination)
+  public func move(uids: [UInt32], from source: String, to destination: String) async throws -> [UInt32: UInt32] {
+    let mapping = try await copy(uids: uids, from: source, to: destination)
     try await delete(uids: uids, in: source)
+    return mapping
   }
 
   public func delete(uids: [UInt32], in path: String) async throws {

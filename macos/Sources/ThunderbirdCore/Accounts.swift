@@ -169,6 +169,12 @@ public struct MessageTag: Sendable, Hashable, Identifiable {
   public var colorHex: String
   public var id: String { keyword }
 
+  public init(keyword: String, name: String, colorHex: String) {
+    self.keyword = keyword
+    self.name = name
+    self.colorHex = colorHex
+  }
+
   public static let defaults: [MessageTag] = [
     MessageTag(keyword: "$label1", name: "Important", colorHex: "#FF0000"),
     MessageTag(keyword: "$label2", name: "Work", colorHex: "#FF9900"),

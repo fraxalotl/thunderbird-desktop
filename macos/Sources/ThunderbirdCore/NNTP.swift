@@ -228,7 +228,7 @@ public actor NNTPBackend: MailBackend {
     try await perform { try await $0.listGroups(matching: pattern.isEmpty ? "*" : pattern) }
   }
 
-  public func setSubscribed(_ group: String, _ subscribed: Bool) {
+  public func updateSubscription(_ group: String, _ subscribed: Bool) {
     var state = loadState()
     state.subscribed.removeAll { $0 == group }
     if subscribed {
@@ -306,10 +306,10 @@ public actor NNTPBackend: MailBackend {
     saveState(state)
   }
 
-  public func move(uids: [UInt32], from source: String, to destination: String) async throws {
+  public func move(uids: [UInt32], from source: String, to destination: String) async throws -> [UInt32: UInt32] {
     throw MailError.unsupported("Moving news articles")
   }
-  public func copy(uids: [UInt32], from source: String, to destination: String) async throws {
+  public func copy(uids: [UInt32], from source: String, to destination: String) async throws -> [UInt32: UInt32] {
     throw MailError.unsupported("Copying news articles")
   }
   public func delete(uids: [UInt32], in path: String) async throws {
@@ -324,14 +324,17 @@ public actor NNTPBackend: MailBackend {
   }
   public func findMessage(messageID: String, in path: String) async throws -> [UInt32] { [] }
   public func createFolder(_ name: String, parent: String?) async throws -> String {
-    setSubscribed(name, true)
+    updateSubscription(name, true)
     return name
+  }
+  public func setSubscribed(_ path: String, _ subscribed: Bool) async throws {
+    updateSubscription(path, subscribed)
   }
   public func renameFolder(_ path: String, to name: String) async throws {
     throw MailError.unsupported("Renaming newsgroups")
   }
   public func deleteFolder(_ path: String) async throws {
-    setSubscribed(path, false)
+    updateSubscription(path, false)
     cache.clearFolder(account: accountID, path: path)
   }
   public func disconnect() async {

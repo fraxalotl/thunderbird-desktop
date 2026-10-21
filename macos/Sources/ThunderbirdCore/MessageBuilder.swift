@@ -27,6 +27,18 @@ public struct OutgoingAlternative: Sendable, Hashable {
   }
 }
 
+public struct InlineImage: Sendable, Hashable {
+  public var contentID: String
+  public var mimeType: String
+  public var data: Data
+
+  public init(contentID: String, mimeType: String, data: Data) {
+    self.contentID = contentID
+    self.mimeType = mimeType
+    self.data = data
+  }
+}
+
 public struct OutgoingSecurity: Sendable, Hashable {
   public var technology: SecurityTechnology
   public var sign: Bool
@@ -65,6 +77,17 @@ public struct OutgoingMessage: Sendable {
   /// Drafts keep Bcc so it survives reopening; sent mail never includes it.
   public var includeBccHeader: Bool
   public var security: OutgoingSecurity?
+  /// Images referenced from the HTML body as `cid:`, sent as multipart/related.
+  public var inlineImages: [InlineImage] = []
+  /// X-Priority, 1 (highest) to 5 (lowest); 0 leaves the header out.
+  public var priority = 0
+  public var requestReturnReceipt = false
+  /// Leaves the HTML part out when the recipient should get plain text only.
+  public var plainTextOnly = false
+  /// Leaves the plain text alternative out ("Only HTML").
+  public var htmlOnly = false
+  /// With encryption, hides the subject outside the encrypted part (protected headers).
+  public var encryptSubject = false
   public var protector: (any EntityProtector)?
 
   public init(
@@ -117,7 +140,15 @@ public struct OutgoingMessage: Sendable {
     if !newsgroups.isEmpty {
       lines.append("Newsgroups: \(newsgroups.joined(separator: ","))")
     }
-    lines.append("Subject: \(Self.encodeHeaderText(subject))")
+    let hideSubject = encryptSubject && (security?.encrypt ?? false)
+    lines.append("Subject: \(hideSubject ? "..." : Self.encodeHeaderText(subject))")
+    if priority > 0 {
+      let names = ["", "Highest", "High", "Normal", "Low", "Lowest"]
+      lines.append("X-Priority: \(priority) (\(names[min(priority, 5)]))")
+    }
+    if requestReturnReceipt {
+      lines.append("Disposition-Notification-To: \(Self.encodeAddress(from))")
+    }
     lines.append("Message-ID: \(messageID)")
     if let inReplyTo {
       lines.append("In-Reply-To: \(inReplyTo)")
@@ -131,7 +162,12 @@ public struct OutgoingMessage: Sendable {
     lines.append("MIME-Version: 1.0")
     lines.append("User-Agent: Thunderbird for macOS")
 
-    var entity = Data(bodyEntity().joined(separator: "\r\n").utf8)
+    var entityLines = bodyEntity()
+    if hideSubject {
+      entityLines[0] += "; protected-headers=\"v1\""
+      entityLines.insert("Subject: \(Self.encodeHeaderText(subject))", at: 1)
+    }
+    var entity = Data(entityLines.joined(separator: "\r\n").utf8)
     if let security, security.sign || security.encrypt {
       guard let protector else { throw MailError.unsupported("Message security") }
       entity = try protector.protect(entity: entity, security: security, from: from, recipients: allRecipients)
@@ -145,15 +181,35 @@ public struct OutgoingMessage: Sendable {
   }
 
   /// The MIME entity (its own Content-Type headers, a blank line and the body).
+  /// The HTML part, wrapped in multipart/related when it references inline images.
+  private func htmlEntity(_ html: String) -> [String] {
+    let part = Self.textPart(html, subtype: "html")
+    guard !inlineImages.isEmpty else { return part }
+    let boundary = Self.makeBoundary()
+    var lines = ["Content-Type: multipart/related; boundary=\"\(boundary)\"", "", "--\(boundary)"] + part
+    for image in inlineImages {
+      lines += [
+        "--\(boundary)", "Content-Type: \(image.mimeType)", "Content-Transfer-Encoding: base64",
+        "Content-ID: <\(image.contentID)>", "Content-Disposition: inline", "",
+        image.data.base64EncodedString(options: [.lineLength76Characters, .endLineWithCarriageReturn, .endLineWithLineFeed]),
+      ]
+    }
+    lines.append("--\(boundary)--")
+    return lines
+  }
+
   func bodyEntity() -> [String] {
     var textEntity: [String]
     let plain = Self.textPart(body, subtype: "plain")
-    if htmlBody != nil || !alternatives.isEmpty {
+    let html = plainTextOnly ? nil : htmlBody
+    if let html, htmlOnly, alternatives.isEmpty {
+      textEntity = htmlEntity(html)
+    } else if html != nil || !alternatives.isEmpty {
       let boundary = Self.makeBoundary()
       textEntity = ["Content-Type: multipart/alternative; boundary=\"\(boundary)\"", "", "--\(boundary)"]
       textEntity += plain
-      if let htmlBody {
-        textEntity += ["--\(boundary)"] + Self.textPart(htmlBody, subtype: "html")
+      if let html {
+        textEntity += ["--\(boundary)"] + htmlEntity(html)
       }
       for alternative in alternatives {
         textEntity += ["--\(boundary)"] + Self.textPart(alternative.text, contentType: alternative.contentType)
@@ -239,7 +295,7 @@ public struct OutgoingMessage: Sendable {
     return output.joined(separator: "\r\n")
   }
 
-  static func encodeAddress(_ address: MailAddress) -> String {
+  public static func encodeAddress(_ address: MailAddress) -> String {
     guard let name = address.name else { return address.email }
     if !name.allSatisfy(\.isASCII) {
       return "\(encodeHeaderText(name)) <\(address.email)>"

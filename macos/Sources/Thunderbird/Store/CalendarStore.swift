@@ -7,6 +7,8 @@ import Foundation
 import Observation
 import SwiftUI
 import ThunderbirdCore
+import UniformTypeIdentifiers
+import AppKit
 
 enum CalendarViewMode: String, CaseIterable, Identifiable {
   case day, week, multiweek, month
@@ -85,6 +87,11 @@ final class CalendarStore {
   var taskFilter: TaskFilter = .all {
     didSet { Task { await reloadReminders() } }
   }
+  /// Set by File › New › Event and Events and Tasks › New Event; the calendar space opens it.
+  var pendingEditor: EventDraft?
+  var pendingTask = false
+  var selectedCalendarID: String?
+  var selectedTaskID: String?
 
   @ObservationIgnored let store = EKEventStore()
   @ObservationIgnored private var observer: NSObjectProtocol?
@@ -398,6 +405,177 @@ final class CalendarStore {
     draft.title = loaded.parsed.subject
     draft.notes = String(loaded.parsed.plainText.prefix(4000))
     return draft
+  }
+
+  // MARK: - Events and Tasks menu
+
+  /// File › New › Calendar…
+  func promptNewCalendar() {
+    let alert = NSAlert()
+    alert.messageText = "New Calendar"
+    let field = NSTextField(string: "")
+    field.placeholderString = "Calendar name"
+    field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+    alert.accessoryView = field
+    alert.addButton(withTitle: "Create")
+    alert.addButton(withTitle: "Cancel")
+    alert.window.initialFirstResponder = field
+    guard alert.runModal() == .alertFirstButtonReturn, !field.stringValue.isEmpty else { return }
+    let calendar = EKCalendar(for: .event, eventStore: store)
+    calendar.title = field.stringValue
+    calendar.source = store.defaultCalendarForNewEvents?.source ?? store.sources.first { $0.sourceType == .local } ?? store.sources.first
+    do {
+      try store.saveCalendar(calendar, commit: true)
+      reloadAll()
+    } catch {
+      showError(error)
+    }
+  }
+
+  /// Events and Tasks › Import… and File › Open › Calendar File…
+  func importCalendarFile() {
+    let panel = NSOpenPanel()
+    panel.allowedContentTypes = [UTType(filenameExtension: "ics") ?? .calendarEvent, .calendarEvent]
+    panel.allowsMultipleSelection = true
+    guard panel.runModal() == .OK else { return }
+    var imported = 0
+    for url in panel.urls {
+      guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+      for invitation in ICalendar.invitations(in: text) {
+        if (try? importInvitation(invitation)) != nil { imported += 1 }
+      }
+    }
+    let alert = NSAlert()
+    alert.messageText = "Imported \(imported) event\(imported == 1 ? "" : "s")."
+    alert.runModal()
+  }
+
+  /// Events and Tasks › Export…: the visible calendars' events as an .ics file.
+  func exportCalendar() {
+    guard let text = icsForVisibleCalendars() else { return }
+    let panel = NSSavePanel()
+    panel.nameFieldStringValue = "Calendar.ics"
+    if panel.runModal() == .OK, let url = panel.url {
+      try? text.write(to: url, atomically: true, encoding: .utf8)
+    }
+  }
+
+  /// Events and Tasks › Publish…: uploads the .ics to a WebDAV/HTTP URL with PUT, as Thunderbird does.
+  func publishCalendar() {
+    guard let text = icsForVisibleCalendars() else { return }
+    let alert = NSAlert()
+    alert.messageText = "Publish Calendar"
+    alert.informativeText = "Enter the address to upload the calendar to (for example a WebDAV URL)."
+    let field = NSTextField(string: "https://")
+    field.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
+    alert.accessoryView = field
+    alert.addButton(withTitle: "Publish")
+    alert.addButton(withTitle: "Cancel")
+    guard alert.runModal() == .alertFirstButtonReturn, let url = URL(string: field.stringValue) else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "PUT"
+    request.setValue("text/calendar; charset=utf-8", forHTTPHeaderField: "Content-Type")
+    request.httpBody = Data(text.utf8)
+    Task {
+      do {
+        let (_, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if !(200..<300).contains(status) { throw MailError.server("The server answered \(status).") }
+      } catch {
+        showError(error)
+      }
+    }
+  }
+
+  private func icsForVisibleCalendars() -> String? {
+    guard hasEventAccess else { return nil }
+    let start = Calendar.current.date(byAdding: .year, value: -1, to: Date())!
+    let end = Calendar.current.date(byAdding: .year, value: 2, to: Date())!
+    let events = store.events(matching: store.predicateForEvents(withStart: start, end: end, calendars: visibleCalendars))
+    var lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Mozilla.org/NONSGML Thunderbird for macOS//EN"]
+    for event in events {
+      lines += ["BEGIN:VEVENT", "UID:\(event.calendarItemExternalIdentifier ?? UUID().uuidString)",
+        "DTSTAMP:\(ICalendar.formatUTC(Date()))"]
+      if event.isAllDay {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd"
+        lines += ["DTSTART;VALUE=DATE:\(formatter.string(from: event.startDate))", "DTEND;VALUE=DATE:\(formatter.string(from: event.endDate))"]
+      } else {
+        lines += ["DTSTART:\(ICalendar.formatUTC(event.startDate))", "DTEND:\(ICalendar.formatUTC(event.endDate))"]
+      }
+      lines.append("SUMMARY:\(ICalendar.escape(event.title ?? ""))")
+      if let location = event.location { lines.append("LOCATION:\(ICalendar.escape(location))") }
+      if let notes = event.notes { lines.append("DESCRIPTION:\(ICalendar.escape(notes))") }
+      lines.append("END:VEVENT")
+    }
+    lines.append("END:VCALENDAR")
+    return lines.joined(separator: "\r\n") + "\r\n"
+  }
+
+  /// Events and Tasks › Delete Selected Calendar…
+  func deleteSelectedCalendar() {
+    guard let id = selectedCalendarID, let calendar = store.calendar(withIdentifier: id) else { return }
+    let alert = NSAlert()
+    alert.messageText = "Delete the calendar “\(calendar.title)”?"
+    alert.informativeText = "All of its events will be deleted from every device that uses it."
+    alert.addButton(withTitle: "Delete")
+    alert.addButton(withTitle: "Cancel")
+    alert.buttons.first?.hasDestructiveAction = true
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+    do {
+      try store.removeCalendar(calendar, commit: true)
+      selectedCalendarID = nil
+      reloadAll()
+    } catch {
+      showError(error)
+    }
+  }
+
+  private var selectedReminder: EKReminder? {
+    selectedTaskID.flatMap { store.calendarItem(withIdentifier: $0) as? EKReminder }
+  }
+
+  func markSelectedTask(completed: Bool) {
+    guard let reminder = selectedReminder else { return }
+    reminder.isCompleted = completed
+    try? store.save(reminder, commit: true)
+    Task { await reloadReminders() }
+  }
+
+  /// Reminders have no partial progress; 100% completes the task and anything less reopens it.
+  func setSelectedTaskProgress(_ percent: Int) {
+    markSelectedTask(completed: percent >= 100)
+  }
+
+  func setSelectedTaskPriority(_ priority: Int) {
+    guard let reminder = selectedReminder else { return }
+    reminder.priority = priority
+    try? store.save(reminder, commit: true)
+    Task { await reloadReminders() }
+  }
+
+  func postponeSelectedTask(by interval: TimeInterval) {
+    guard let reminder = selectedReminder else { return }
+    let current = reminder.dueDateComponents?.date ?? Date()
+    reminder.dueDateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: current.addingTimeInterval(interval))
+    try? store.save(reminder, commit: true)
+    Task { await reloadReminders() }
+  }
+
+  /// The Events Search (unifinder): events in the next and previous year matching the text.
+  func searchEvents(_ text: String) -> [EKEvent] {
+    guard hasEventAccess, !text.isEmpty else { return [] }
+    let start = Calendar.current.date(byAdding: .year, value: -1, to: Date())!
+    let end = Calendar.current.date(byAdding: .year, value: 1, to: Date())!
+    return store.events(matching: store.predicateForEvents(withStart: start, end: end, calendars: visibleCalendars))
+      .filter { ($0.title ?? "").localizedCaseInsensitiveContains(text) || ($0.location ?? "").localizedCaseInsensitiveContains(text)
+        || ($0.notes ?? "").localizedCaseInsensitiveContains(text) }
+      .sorted { $0.startDate < $1.startDate }
+  }
+
+  private func showError(_ error: Error) {
+    let alert = NSAlert(error: error)
+    alert.runModal()
   }
 
   static func color(_ calendar: EKCalendar?) -> Color {
