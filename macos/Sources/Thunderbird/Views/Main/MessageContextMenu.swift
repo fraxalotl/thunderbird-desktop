@@ -14,62 +14,80 @@ struct MessageContextMenu: View {
   let calendar: CalendarStore
   let ui: MailUIState?
   let openWindow: OpenWindowAction
+  /// The messages the menu was opened on, which may not be the current selection yet.
+  let targets: Set<MessageReference>
 
-  private var loaded: LoadedMessage? { store.loadedMessage }
-  private var isSingle: Bool { store.selection.count == 1 && loaded != nil }
-  private var isNews: Bool { loaded?.account.kind == .nntp }
-  private var allRead: Bool { store.selectedItems.allSatisfy(\.summary.isRead) }
-  private var allJunk: Bool { store.selectedItems.allSatisfy(\.summary.isJunk) }
+  private var targetItems: [MessageItem] { store.items.filter { targets.contains($0.reference) } }
+  private var isSingle: Bool { targets.count == 1 }
+  private var role: FolderRole { targets.first.map(store.role(of:)) ?? .normal }
+  private var isNews: Bool { store.account(targets.first?.accountID)?.kind == .nntp }
+  private var allRead: Bool { targetItems.allSatisfy(\.summary.isRead) }
+  private var allJunk: Bool { targetItems.allSatisfy(\.summary.isJunk) }
+  private var allStarred: Bool { targetItems.allSatisfy(\.summary.isFlagged) }
+  private var canArchive: Bool { store.canMove(targets, to: .archive) }
 
   private func compose(_ draft: ComposeDraft?) {
     if let draft { openWindow(id: WindowID.compose, value: draft) }
   }
 
+  /// Selects the clicked messages, then runs the command with the loaded message (if single).
+  private func act(_ body: @escaping @MainActor (LoadedMessage?) async -> Void) {
+    Task { @MainActor in
+      await store.focusSelection(targets)
+      await body(isSingle ? store.loadedMessage : nil)
+    }
+  }
+
   var body: some View {
     ControlGroup {
       if allRead {
-        Button("Mark as Unread", systemImage: "envelope.badge") { Task { await store.setFlag(MessageFlag.seen, on: false) } }
+        Button("Mark as Unread", systemImage: "envelope.badge") { act { _ in await store.setFlag(MessageFlag.seen, on: false) } }
       } else {
-        Button("Mark as Read", systemImage: "envelope.open") { Task { await store.setFlag(MessageFlag.seen, on: true) } }
+        Button("Mark as Read", systemImage: "envelope.open") { act { _ in await store.setFlag(MessageFlag.seen, on: true) } }
       }
-      Button("Reply", systemImage: "arrowshape.turn.up.left") { compose(store.replyDraft(isNews ? .newsgroup : .sender)) }
-        .disabled(!isSingle)
-      Button("Archive", systemImage: "archivebox") { Task { await store.moveSelected(to: .archive) } }
-        .disabled(!store.canMoveSelection(to: .archive))
+      Button("Reply", systemImage: "arrowshape.turn.up.left") {
+        act { loaded in compose(store.replyDraft(isNews ? .newsgroup : .sender, to: loaded)) }
+      }
+      .disabled(!isSingle)
+      Button("Archive", systemImage: "archivebox") { act { _ in await store.moveSelected(to: .archive) } }
+        .disabled(!canArchive)
       if allJunk {
-        Button("Mark as not Spam", systemImage: "flame.slash") { Task { await store.markJunk(false) } }
+        Button("Mark as not Spam", systemImage: "flame.slash") { act { _ in await store.markJunk(false) } }
       } else {
-        Button("Mark as Spam", systemImage: "flame") { Task { await store.markJunk(true) } }
+        Button("Mark as Spam", systemImage: "flame") { act { _ in await store.markJunk(true) } }
       }
-      Button("Delete", systemImage: "trash", role: .destructive) { Task { await store.deleteSelected() } }
+      Button("Delete", systemImage: "trash", role: .destructive) { act { _ in await store.deleteSelected() } }
     }
     .controlGroupStyle(.palette)
 
-    if isSingle, let loaded {
-      if loaded.folderRole == .drafts {
-        Button("Edit Draft Message") { compose(store.reopenDraft(loaded)) }
+    if isSingle {
+      if role == .drafts {
+        Button("Edit Draft Message") { act { loaded in compose(loaded.flatMap(store.reopenDraft)) } }
       }
-      if loaded.folderRole == .templates {
-        Button("New Message from Template") { compose(store.reopenDraft(loaded)) }
-        Button("Edit Template") { compose(store.editTemplate()) }
+      if role == .templates {
+        Button("New Message from Template") { act { loaded in compose(loaded.flatMap(store.reopenDraft)) } }
+        Button("Edit Template") { act { _ in compose(store.editTemplate()) } }
       }
-      if loaded.folderRole == .drafts || loaded.folderRole == .templates {
+      if role == .drafts || role == .templates {
         Divider()
       }
     }
 
     Menu("Open") {
       Button("Open Message in New Window") {
-        for reference in store.selection { store.openMessageWindow(reference, using: openWindow) }
+        for reference in targets { store.openMessageWindow(reference, using: openWindow) }
       }
       Button("Open Message in Conversation") {
-        if let reference = store.selection.first { openWindow(id: WindowID.conversation, value: reference) }
+        if let reference = targets.first { openWindow(id: WindowID.conversation, value: reference) }
       }
       .disabled(!isSingle)
-      if store.selectedFolder == nil || store.selectedItems.contains(where: { FolderSelection(accountID: $0.reference.accountID, path: $0.reference.path) != store.selectedFolder }) {
+      if store.selectedFolder == nil
+        || targets.contains(where: { FolderSelection(accountID: $0.accountID, path: $0.path) != store.selectedFolder })
+      {
         Button("Open Message in Containing Folder") {
-          if let reference = store.selection.first {
+          if let reference = targets.first {
             store.source = .folder(FolderSelection(accountID: reference.accountID, path: reference.path))
+            store.selection = [reference]
           }
         }
         .disabled(!isSingle)
@@ -78,12 +96,12 @@ struct MessageContextMenu: View {
 
     Menu("Reply") {
       if isNews {
-        Button("Followup to Newsgroup") { compose(store.replyDraft(.newsgroup)) }
+        Button("Followup to Newsgroup") { act { loaded in compose(store.replyDraft(.newsgroup, to: loaded)) } }
       }
-      Button("Reply to Sender Only") { compose(store.replyDraft(.sender)) }
-      Button("Reply to All") { compose(store.replyDraft(.all)) }
-      Button("Reply to List") { compose(store.replyDraft(.list)) }
-        .disabled(!store.canReplyToList(loaded))
+      Button("Reply to Sender Only") { act { loaded in compose(store.replyDraft(.sender, to: loaded)) } }
+      Button("Reply to All") { act { loaded in compose(store.replyDraft(.all, to: loaded)) } }
+      Button("Reply to List") { act { loaded in compose(store.replyDraft(.list, to: loaded)) } }
+        .disabled(targetItems.first?.summary.listPost == nil)
     }
     .disabled(!isSingle)
 
@@ -94,106 +112,126 @@ struct MessageContextMenu: View {
       }
       ForEach(store.localTemplates) { template in
         Button(template.summary.subject.nilIfEmpty ?? "(no subject)") {
-          guard let loaded else { return }
-          Task { compose(await store.replyWithTemplate(template.reference, to: loaded)) }
+          act { loaded in
+            guard let loaded else { return }
+            compose(await store.replyWithTemplate(template.reference, to: loaded))
+          }
         }
       }
     }
     .disabled(!isSingle)
 
     Menu("Forward and Redirect") {
-      Button("Forward") { compose(store.forwardDraft(.preferred)) }
-      Button("Inline") { compose(store.forwardDraft(.inline)) }
-      Button("As Attachment") { compose(store.forwardDraft(.attachment)) }
+      Button("Forward") { act { loaded in compose(store.forwardDraft(.preferred, loaded)) } }
+      Button("Inline") { act { loaded in compose(store.forwardDraft(.inline, loaded)) } }
+      Button("As Attachment") { act { loaded in compose(store.forwardDraft(.attachment, loaded)) } }
       Divider()
-      Button("Redirect") { if let loaded { ui?.present(.redirect(loaded)) } }
+      Button("Redirect") { act { loaded in if let loaded { ui?.present(.redirect(loaded)) } } }
         .disabled(ui == nil)
     }
     .disabled(!isSingle)
 
     if isNews, isSingle {
-      Button("Cancel Message") { if let loaded { Task { await store.cancelNewsMessage(loaded) } } }
+      Button("Cancel Message") { act { loaded in if let loaded { await store.cancelNewsMessage(loaded) } } }
     }
-    Button("Edit As New Message") { compose(store.editAsNew()) }
+    Button("Edit As New Message") { act { _ in compose(store.editAsNew()) } }
       .disabled(!isSingle)
 
     Divider()
 
     if store.lastMoveTarget != nil {
-      Button("Move Again") { Task { await store.moveAgain() } }
+      Button("Move Again") { act { _ in await store.moveAgain() } }
     }
     FolderPickerMenu(title: "Move To", store: store) { destination in
-      Task { await store.transfer(Array(store.selection), to: destination, copy: false) }
+      Task { await store.transfer(Array(targets), to: destination, copy: false) }
     }
     FolderPickerMenu(title: "Copy To", store: store) { destination in
-      Task { await store.transfer(Array(store.selection), to: destination, copy: true) }
+      Task { await store.transfer(Array(targets), to: destination, copy: true) }
     }
-    TagMenu(store: store, ui: ui)
+    Menu("Tag") {
+      Button("New Tag…") { act { _ in ui?.present(.newTag) } }
+        .disabled(ui == nil)
+      Button("Manage Tags…") { ui?.present(.manageTags) }
+        .disabled(ui == nil)
+      Divider()
+      Button("Remove All Tags") { act { _ in await store.removeAllTags() } }
+      Divider()
+      ForEach(Array(MessageTagStore.shared.tags.enumerated()), id: \.element.keyword) { index, tag in
+        Toggle(
+          isOn: Binding(
+            get: { !targetItems.isEmpty && targetItems.allSatisfy { $0.summary.flags.contains(tag.keyword) } },
+            set: { _ in act { _ in await store.toggleTag(tag.keyword) } })
+        ) {
+          Text("\(index < 9 ? "\(index + 1) " : "")\(tag.name)")
+        }
+      }
+    }
     Menu("Mark") {
-      Button("As Read") { Task { await store.setFlag(MessageFlag.seen, on: true) } }
-      Button("As Unread") { Task { await store.setFlag(MessageFlag.seen, on: false) } }
-      Button("Thread As Read") { Task { await store.markThreadRead() } }
+      Button("As Read") { act { _ in await store.setFlag(MessageFlag.seen, on: true) } }
+      Button("As Unread") { act { _ in await store.setFlag(MessageFlag.seen, on: false) } }
+      Button("Thread As Read") { act { _ in await store.markThreadRead() } }
       Button("As Read by Date…") { ui?.present(.markReadByDate) }
       Button("All Read") { Task { await store.markAllRead() } }
       Divider()
-      Button(store.selectedItems.allSatisfy(\.summary.isFlagged) ? "Remove Star" : "Add Star") {
-        Task { await store.toggleStar() }
-      }
+      Button(allStarred ? "Remove Star" : "Add Star") { act { _ in await store.toggleStar() } }
       Divider()
-      Button("As Spam") { Task { await store.markJunk(true) } }
-      Button("As Not Spam") { Task { await store.markJunk(false) } }
-      Button("Run Spam Controls") { Task { await store.runSpamControls(on: store.selection) } }
+      Button("As Spam") { act { _ in await store.markJunk(true) } }
+      Button("As Not Spam") { act { _ in await store.markJunk(false) } }
+      Button("Run Spam Controls") { Task { await store.runSpamControls(on: targets) } }
     }
     Menu("Organise") {
-      Button("Archive") { Task { await store.moveSelected(to: .archive) } }
-        .disabled(!store.canMoveSelection(to: .archive))
-      if loaded?.security?.encrypted == true {
+      Button("Archive") { act { _ in await store.moveSelected(to: .archive) } }
+        .disabled(!canArchive)
+      if isSingle, store.loadedMessage?.reference == targets.first, store.loadedMessage?.security?.encrypted == true {
         FolderPickerMenu(title: "Create Decrypted Copy In", store: store) { destination in
-          if let loaded { Task { await store.copyDecrypted(loaded, to: destination) } }
+          act { loaded in if let loaded { await store.copyDecrypted(loaded, to: destination) } }
         }
       }
       Menu("Convert To") {
-        Button("Event…") { if let loaded { ui?.present(.event(calendar.eventDraft(from: loaded))) } }
+        Button("Event…") { act { loaded in if let loaded { ui?.present(.event(calendar.eventDraft(from: loaded))) } } }
         Button("Task…") {
-          if let loaded {
+          act { loaded in
+            guard let loaded else { return }
             do { try calendar.createTask(from: loaded) } catch { store.report(error, title: "Couldn't create the task") }
           }
         }
       }
       .disabled(!isSingle)
       Button("Copy Message Link") {
-        guard let id = loaded?.parsed.messageID else { return }
+        guard let id = targetItems.first?.summary.messageID else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString("mid:" + id.trimmingCharacters(in: CharacterSet(charactersIn: "<>")), forType: .string)
       }
-      .disabled(loaded?.parsed.messageID == nil || !isSingle)
+      .disabled(!isSingle || targetItems.first?.summary.messageID == nil)
     }
 
     Divider()
 
     Menu("Threads") {
-      let ignored = store.selectedItems.contains { store.ignoredThreads.contains($0.summary.references.first ?? $0.summary.messageID ?? "") }
-      Button(ignored ? "Stop Ignoring Thread" : "Ignore Thread") { store.toggleIgnoreThread() }
-      Button("Ignore Subthread") { store.toggleIgnoreThread(subthread: true) }
-      Button(store.selectedItems.contains { store.isWatched($0.summary) } ? "Stop Watching Thread" : "Watch Thread") {
-        store.toggleWatchThread()
+      let ignored = targetItems.contains { store.ignoredThreads.contains($0.summary.references.first ?? $0.summary.messageID ?? "") }
+      Button(ignored ? "Stop Ignoring Thread" : "Ignore Thread") { act { _ in store.toggleIgnoreThread() } }
+      Button("Ignore Subthread") { act { _ in store.toggleIgnoreThread(subthread: true) } }
+      Button(targetItems.contains { store.isWatched($0.summary) } ? "Stop Watching Thread" : "Watch Thread") {
+        act { _ in store.toggleWatchThread() }
       }
     }
 
     Divider()
 
     Button("Save As…") { saveAs() }
-    Button("Print…") { ui?.reader.print() }
+    Button("Print…") { act { _ in ui?.reader.print() } }
       .disabled(!isSingle || ui == nil)
   }
 
   /// One message is saved as an .eml file; several go into a chosen folder.
   private func saveAs() {
-    let references = Array(store.selection)
-    if references.count == 1, let loaded {
+    let references = Array(targets)
+    if references.count == 1, let reference = references.first {
+      let subject = targetItems.first?.summary.subject.nilIfEmpty ?? "Message"
       let panel = NSSavePanel()
-      panel.nameFieldStringValue = (loaded.parsed.subject.nilIfEmpty ?? "Message").replacingOccurrences(of: "/", with: "-") + ".eml"
-      if panel.runModal() == .OK, let url = panel.url { try? loaded.raw.write(to: url) }
+      panel.nameFieldStringValue = subject.replacingOccurrences(of: "/", with: "-") + ".eml"
+      guard panel.runModal() == .OK, let url = panel.url else { return }
+      Task { if let message = try? await store.loadMessage(reference) { try? message.raw.write(to: url) } }
       return
     }
     let panel = NSOpenPanel()

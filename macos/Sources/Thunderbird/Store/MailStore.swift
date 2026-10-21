@@ -498,6 +498,24 @@ final class MailStore {
   }
 
   /// True when the action applies to at least one selected message outside a folder of `role`.
+  /// Selects `targets` (the right-clicked messages) and waits for a single message to load, so
+  /// context menu commands act on what was clicked.
+  func focusSelection(_ targets: Set<MessageReference>) async {
+    if selection != targets { selection = targets }
+    guard targets.count == 1, let target = targets.first else { return }
+    for _ in 0..<60 {
+      if loadedMessage?.reference == target { return }
+      if case .failed = reader { return }
+      try? await Task.sleep(for: .milliseconds(50))
+    }
+  }
+
+  func canMove(_ references: Set<MessageReference>, to role: FolderRole) -> Bool {
+    references.contains { reference in
+      folder(role: role, in: reference.accountID).map { $0.path != reference.path } ?? false
+    }
+  }
+
   func canMoveSelection(to role: FolderRole) -> Bool {
     selection.contains { reference in
       folder(role: role, in: reference.accountID).map { $0.path != reference.path } ?? false

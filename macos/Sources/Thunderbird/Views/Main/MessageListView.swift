@@ -32,7 +32,7 @@ struct MessageListView: View {
     .focused($focused)
     .contextMenu(forSelectionType: MessageReference.self) { selection in
       if !selection.isEmpty {
-        MessageContextMenu(store: store, calendar: calendar, ui: ui, openWindow: openWindow)
+        MessageContextMenu(store: store, calendar: calendar, ui: ui, openWindow: openWindow, targets: selection)
       }
     } primaryAction: { selection in
       guard selection.count == 1, let reference = selection.first else { return }
