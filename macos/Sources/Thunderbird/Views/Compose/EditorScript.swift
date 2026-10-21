@@ -15,8 +15,10 @@ enum EditorScript {
            min-height: calc(100vh - 28px); outline: none; word-wrap: break-word; }
     blockquote[type=cite] { margin: 0 0 0 4px; padding-left: 10px; border-left: 2px solid #3a7bd5; color: #3a7bd5; }
     img { max-width: 100%; }
-    table { border-collapse: collapse; }
-    td, th { border: 1px solid #a0a0a0; padding: 4px 6px; min-width: 2em; }
+    table.tb-table { border-collapse: collapse; }
+    table.tb-table > * > tr > :is(td, th) { border: 1px solid #a0a0a0; padding: 4px 6px; min-width: 2em; }
+    table:is([border="0"], :not([border])), table:is([border="0"], :not([border])) > * > tr > :is(td, th) {
+      outline: 1px dotted red; outline-offset: -1px; }
     a[name]:not([href])::before { content: "#"; font-size: 0.8em; color: #888; }
     pre { white-space: pre-wrap; }
     .moz-signature { color: #6e6e73; }
@@ -100,14 +102,81 @@ enum EditorScript {
         return { row, table: cell.closest('table'), rowIndex: row.rowIndex, cellIndex: cell.cellIndex };
       };
 
+      // A message's own <head> styles and <body> attributes live on the editor's head and body,
+      // with head nodes marked data-tb-message so tb.html() can tell them from the editor's own.
+      const editorBodyAttributes = new Set(['contenteditable', 'spellcheck', 'data-link']);
+      const escapeAttribute = (value) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      const isDocument = (html) => /<(html|head|body)[\s>]/i.test(html);
+      const adoptHead = (doc) => {
+        const existing = new Set([...document.head.querySelectorAll('[data-tb-message]')].map(n => n.outerHTML));
+        doc.head.querySelectorAll('link[rel~="stylesheet" i], style, meta[name]').forEach(node => {
+          const copy = document.importNode(node, true);
+          copy.setAttribute('data-tb-message', '');
+          if (!existing.has(copy.outerHTML)) { document.head.append(copy); existing.add(copy.outerHTML); }
+        });
+      };
+      const adoptBody = (body) => {
+        [...body.attributes].filter(a => !editorBodyAttributes.has(a.name)).forEach(a => {
+          const current = a.name === 'style' ? document.body.getAttribute('style') : null;
+          document.body.setAttribute(a.name, current ? `${current};${a.value}` : a.value);
+        });
+      };
+      const isBlank = () => {
+        const body = document.body.cloneNode(true);
+        body.querySelectorAll('.moz-signature').forEach(n => n.remove());
+        return !body.textContent.trim() && !body.querySelector('img, table, hr');
+      };
+
       window.tb = {
         exec: (cmd, value) => { document.body.focus(); document.execCommand(cmd, false, value ?? null); state(); post('dirty'); },
-        html: () => document.body.innerHTML,
+        html: () => {
+          const head = [...document.head.querySelectorAll('[data-tb-message]')].map(n => {
+            const copy = n.cloneNode(true); copy.removeAttribute('data-tb-message'); return copy.outerHTML; }).join('');
+          const attrs = [...document.body.attributes].filter(a => !editorBodyAttributes.has(a.name))
+            .map(a => ` ${a.name}="${escapeAttribute(a.value)}"`).join('');
+          return '<!DOCTYPE html><html><head><meta http-equiv="content-type" content="text/html; charset=UTF-8">'
+            + `${head}</head><body${attrs}>${document.body.innerHTML}</body></html>`;
+        },
         text: () => document.body.innerText,
-        setHTML: (html) => { document.body.innerHTML = html; },
+        setHTML: (html) => {
+          if (!isDocument(html)) { document.body.innerHTML = html; return; }
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          adoptHead(doc);
+          adoptBody(doc.body);
+          document.body.innerHTML = doc.body.innerHTML;
+        },
         focusStart: () => { document.body.focus(); const r = document.createRange(); r.setStart(document.body, 0);
           r.collapse(true); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); },
-        insertHTML: (html) => { document.body.focus(); document.execCommand('insertHTML', false, html); post('dirty'); },
+        insertHTML: (html) => {
+          document.body.focus();
+          if (!isDocument(html)) { document.execCommand('insertHTML', false, html); post('dirty'); return; }
+          // WebKit's insertHTML drops <link>, <style> and <meta> and rewrites inline styles, so a
+          // whole document has its head moved to the editor's head and its body inserted as is.
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          doc.querySelectorAll('script').forEach(n => n.remove());
+          adoptHead(doc);
+          const style = doc.body.getAttribute('style');
+          const blank = isBlank();
+          if (blank) { adoptBody(doc.body); html = doc.body.innerHTML; }
+          else html = style ? `<div style="${escapeAttribute(style)}">${doc.body.innerHTML}</div>` : doc.body.innerHTML;
+          const template = document.createElement('template');
+          template.innerHTML = html;
+          const sel = window.getSelection();
+          const range = document.createRange();
+          if (blank) {
+            [...document.body.childNodes].filter(n => !(n.classList && n.classList.contains('moz-signature'))).forEach(n => n.remove());
+            range.setStart(document.body, 0);
+          } else {
+            // Insert between top-level blocks, so tables never end up inside a paragraph.
+            let block = sel.rangeCount ? sel.getRangeAt(0).endContainer : null;
+            while (block && block.parentNode !== document.body) block = block.parentNode;
+            if (block) range.setStartAfter(block); else range.setStart(document.body, document.body.childNodes.length);
+          }
+          const last = template.content.lastChild;
+          range.insertNode(template.content);
+          if (last) { range.setStartAfter(last); range.collapse(true); sel.removeAllRanges(); sel.addRange(range); }
+          post('dirty');
+        },
         wrap,
         nonbreaking: () => { const sel = window.getSelection(); if (!sel.rangeCount) return;
           const text = sel.toString().replace(/ /g, ' '); document.execCommand('insertText', false, text); },
@@ -125,14 +194,14 @@ enum EditorScript {
         breakBelowImages: () => { document.querySelectorAll('img').forEach(img => {
             if (!(img.nextSibling && img.nextSibling.nodeName === 'BR')) img.after(document.createElement('br')); }); post('dirty'); },
         insertTable: (rows, cols, border, width) => {
-          let html = `<table border="${border}" style="width:${width}">`;
+          let html = `<table class="tb-table" border="${border}" style="width:${width}">`;
           for (let r = 0; r < rows; r++) { html += '<tr>'; for (let c = 0; c < cols; c++) html += '<td>&nbsp;</td>'; html += '</tr>'; }
           document.execCommand('insertHTML', false, html + '</table><p><br></p>'); post('dirty');
         },
         tableFromSelection: () => {
           const text = window.getSelection().toString(); if (!text) return;
           const rows = text.split(/\n/).filter(l => l.length).map(l => l.split(/\t|,/));
-          const html = '<table border="1">' + rows.map(r => '<tr>' + r.map(c => `<td>${c.trim()}</td>`).join('') + '</tr>').join('') + '</table>';
+          const html = '<table class="tb-table" border="1">' + rows.map(r => '<tr>' + r.map(c => `<td>${c.trim()}</td>`).join('') + '</tr>').join('') + '</table>';
           document.execCommand('insertHTML', false, html); post('dirty');
         },
         tableOp: (op, arg) => {

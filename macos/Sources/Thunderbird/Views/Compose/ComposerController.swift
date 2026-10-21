@@ -112,7 +112,10 @@ final class ComposerController {
       }
       if draft.kind != .draft && draft.kind != .template {
         _ = try? await webView?.callAsyncJavaScript(
-          "const s = document.body.style; if (font) s.fontFamily = font; s.fontSize = size + 'px'; s.color = color; s.backgroundColor = background;",
+          """
+          const s = document.body.style; if (font && !s.fontFamily) s.fontFamily = font; if (!s.fontSize) s.fontSize = size + 'px';
+          if (!s.color) s.color = color; if (!s.backgroundColor) s.backgroundColor = background;
+          """,
           arguments: [
             "font": Preferences.string(Preferences.composeFont), "size": max(9, Preferences.int(Preferences.composeFontSize)),
             "color": Preferences.string(Preferences.composeTextColor), "background": Preferences.string(Preferences.composeBackground),
