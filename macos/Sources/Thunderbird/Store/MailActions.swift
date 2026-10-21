@@ -77,6 +77,43 @@ extension MailStore {
     return draft
   }
 
+  /// The Local Folders templates offered by Reply with Template, sorted by subject.
+  func reloadLocalTemplates() async {
+    localTemplates = await fetchLocalTemplates()
+  }
+
+  private func fetchLocalTemplates() async -> [MessageItem] {
+    guard let localID = localFoldersID, let folder = folder(role: .templates, in: localID), let backend = backend(localID)
+    else { return [] }
+    _ = try? await backend.sync(path: folder.path, limit: 500)
+    return await backend.cachedMessages(in: folder.path)
+      .map { MessageItem(reference: MessageReference(accountID: localID, path: folder.path, uid: $0.uid), summary: $0) }
+      .sorted { $0.summary.subject.localizedCaseInsensitiveCompare($1.summary.subject) == .orderedAscending }
+  }
+
+  /// Reply with Template: a reply to `loaded` whose body and attachments come from the template.
+  func replyWithTemplate(_ template: MessageReference, to loaded: LoadedMessage) async -> ComposeDraft? {
+    guard var draft = replyDraft(.sender, to: loaded), let templateMessage = try? await loadMessage(template) else { return nil }
+    let body = ComposeDraft.reopen(
+      templateMessage.parsed, reference: template, account: templateMessage.account, asTemplate: true)
+    draft.body = body.body
+    draft.htmlBody = body.htmlBody
+    draft.isHTML = body.isHTML
+    draft.attachments = body.attachments
+    draft.subject = "Re: " + loaded.parsed.subject
+    return draft
+  }
+
+  /// Organize › Create Decrypted Copy In.
+  func copyDecrypted(_ loaded: LoadedMessage, to destination: FolderSelection) async {
+    let (decrypted, _) = MessageSecurity.unprotect(loaded.raw)
+    do {
+      try await backend(destination.accountID)?.append(decrypted, to: destination.path, flags: [MessageFlag.seen])
+    } catch {
+      report(error, title: "Couldn't create the decrypted copy")
+    }
+  }
+
   func canReplyToList(_ loaded: LoadedMessage?) -> Bool {
     loaded.map { $0.summary.listPost != nil || $0.parsed.headers["List-Post"] != nil } ?? false
   }

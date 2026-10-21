@@ -225,6 +225,8 @@ final class MailStore {
   private(set) var reader: ReaderState = .empty
   /// A displayed message whose sender asked for a return receipt, when the account policy is "ask".
   var pendingReceipt: LoadedMessage?
+  /// Local Folders › Templates, for the message context menu's Reply with Template.
+  var localTemplates: [MessageItem] = []
   /// Reading & Display › Open messages in an existing window: the newest message window shows this.
   var messageWindowRequest: MessageReference?
   var openMessageWindows: [UUID] = []
@@ -344,6 +346,7 @@ final class MailStore {
         source = .folder(FolderSelection(accountID: first.id, path: inboxPath(for: first.id) ?? "INBOX"))
       }
       updateDockBadge()
+      await reloadLocalTemplates()
       await withTaskGroup(of: Void.self) { group in
         for account in accounts where account.options.checkAtStartup {
           group.addTask { await self.refresh(accountID: account.id) }
@@ -583,6 +586,7 @@ final class MailStore {
       }
       accountErrors[accountID] = nil
       updateDockBadge()
+      if account(accountID)?.kind == .local { await reloadLocalTemplates() }
       Task { await self.applyStoragePolicies(accountID) }
     } catch {
       if !(error is CancellationError) {
@@ -1641,7 +1645,17 @@ final class MailStore {
     let asTemplate = requestedTemplate || draft.editingTemplate
     let (account, message) = try outgoingMessage(draft, forDraft: true)
     let role: FolderRole = asTemplate ? .templates : .drafts
-    let target = try await ensureFolder(role, in: account)
+    let target: FolderSelection
+    if asTemplate, let existing = draft.savedDraft, draft.editingTemplate {
+      target = FolderSelection(accountID: existing.accountID, path: existing.path)
+    } else if asTemplate, account.options.templatesFolder == nil, let localID = localFoldersID,
+      let localAccount = self.account(localID)
+    {
+      // Templates live in Local Folders unless the account names its own Templates folder.
+      target = try await ensureFolder(.templates, in: localAccount)
+    } else {
+      target = try await ensureFolder(role, in: account)
+    }
     let messageID = (asTemplate ? nil : draft.draftMessageID) ?? OutgoingMessage.makeMessageID(domainOf: account.email)
     let data = try message.render(messageID: messageID)
     guard let backend = backends[target.accountID] else { throw MailError.connectionClosed }
@@ -1656,6 +1670,7 @@ final class MailStore {
     if source == .folder(target) {
       await reloadSource()
     }
+    if asTemplate { await reloadLocalTemplates() }
     return messageID
   }
 
