@@ -43,6 +43,8 @@ struct ComposeDraft: Codable, Hashable, Identifiable {
   var encryptSubject = true
   var copyToFolder: FolderSelection?
   var securityTechnology: SecurityTechnology?
+  /// Options › Customize From Address: a one-off From address used instead of the identity's.
+  var customFrom: String?
 }
 
 /// Options › Sending format.

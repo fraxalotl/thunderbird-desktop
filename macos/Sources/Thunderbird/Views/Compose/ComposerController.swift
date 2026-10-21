@@ -63,7 +63,20 @@ final class ComposerController {
   var spellcheckAsYouType = true
   var remindLater = false
   var zoom: Double = 1 {
-    didSet { webView?.pageZoom = zoom }
+    didSet { applyZoom() }
+  }
+  var zoomTextOnly = false {
+    didSet { applyZoom() }
+  }
+
+  private func applyZoom() {
+    if zoomTextOnly {
+      webView?.pageZoom = 1
+      Task { _ = try? await webView?.callAsyncJavaScript("document.body.style.zoom = z", arguments: ["z": zoom], contentWorld: .page) }
+    } else {
+      Task { _ = try? await webView?.callAsyncJavaScript("document.body.style.zoom = ''", contentWorld: .page) }
+      webView?.pageZoom = zoom
+    }
   }
 
   var findText = ""
@@ -501,6 +514,17 @@ final class ComposerController {
       try? data.write(to: url)
     }
   }
+
+  var openPGPConfigured: Bool {
+    guard OpenPGP.shared.isAvailable, let store else { return false }
+    return store.sendingAccounts.flatMap(\.identities).contains { !OpenPGP.shared.keys(for: $0.email).filter(\.hasSecret).isEmpty }
+  }
+
+  var smimeConfigured: Bool {
+    store?.sendingAccounts.flatMap(\.identities).contains { SMIME.hasIdentity(for: $0.email) } ?? false
+  }
+
+  var anySecurityConfigured: Bool { openPGPConfigured || smimeConfigured }
 
   var securityAvailable: Bool {
     guard let (account, identity) = store?.identity(for: draft) else { return false }

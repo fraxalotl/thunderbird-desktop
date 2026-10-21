@@ -73,6 +73,7 @@ struct ComposeWindow: View {
     .navigationTitle(controller.draft.subject.nilIfEmpty ?? "Write")
     .toolbar(id: "compose") { toolbar }
     .focusedSceneValue(\.composer, controller)
+    .background(ComposeWindowMarker())
     .dropDestination(for: URL.self) { urls, _ in
       let files = urls.filter(\.isFileURL)
       controller.draft.attachments.append(contentsOf: files)
@@ -100,6 +101,7 @@ struct ComposeWindow: View {
       controller.store = store
       controller.closeWindow = { dismissWindow() }
       controller.startAutosave()
+      MenuBarSync.shared.securityAvailable = controller.anySecurityConfigured
       if controller.draft.accountID == nil {
         controller.draft.accountID = store.sendingAccounts.first?.id
         controller.draft.identityID = controller.draft.accountID
@@ -227,17 +229,25 @@ struct ComposeWindow: View {
       GridRow {
         fieldLabel("From")
         HStack {
-          Picker("From", selection: identityTag) {
-            ForEach(store.sendingAccounts) { account in
-              Section(account.label) {
-                ForEach(account.identities) { identity in
-                  Text(identity.address.formatted).tag("\(account.id.uuidString)|\(identity.id.uuidString)")
+          if let customFrom = controller.draft.customFrom {
+            TextField(
+              "From", text: Binding(get: { customFrom }, set: { controller.draft.customFrom = $0 }),
+              prompt: Text("Enter custom From address to be used instead of \(store.identity(for: controller.draft)?.1.address.formatted ?? "")"))
+              .textFieldStyle(.roundedBorder)
+              .frame(minWidth: 320)
+          } else {
+            Picker("From", selection: identityTag) {
+              ForEach(store.sendingAccounts) { account in
+                Section(account.label) {
+                  ForEach(account.identities) { identity in
+                    Text(identity.address.formatted).tag("\(account.id.uuidString)|\(identity.id.uuidString)")
+                  }
                 }
               }
             }
+            .labelsHidden()
+            .fixedSize()
           }
-          .labelsHidden()
-          .fixedSize()
           Spacer()
           GlassEffectContainer(spacing: 4) {
             HStack(spacing: 4) {
@@ -404,12 +414,14 @@ struct SecurityMenuItems: View {
 
   var body: some View {
     let technology = controller.draft.securityTechnology ?? controller.store?.identity(for: controller.draft)?.0.securityTechnology ?? .openPGP
-    Picker("Technology", selection: Binding(get: { technology }, set: { controller.draft.securityTechnology = $0 })) {
-      Text("OpenPGP").tag(SecurityTechnology.openPGP)
-      Text("S/MIME").tag(SecurityTechnology.smime)
+    if controller.openPGPConfigured && controller.smimeConfigured {
+      Picker("Technology", selection: Binding(get: { technology }, set: { controller.draft.securityTechnology = $0 })) {
+        Text("OpenPGP").tag(SecurityTechnology.openPGP)
+        Text("S/MIME").tag(SecurityTechnology.smime)
+      }
+      .pickerStyle(.inline)
+      Divider()
     }
-    .pickerStyle(.inline)
-    Divider()
     Toggle("Encrypt", isOn: Binding(get: { controller.draft.encrypt }, set: { controller.draft.encrypt = $0 }))
       .disabled(!controller.securityAvailable)
     Toggle("Encrypt Subject", isOn: Binding(get: { controller.draft.encryptSubject }, set: { controller.draft.encryptSubject = $0 }))

@@ -15,30 +15,27 @@ struct ComposeMenus: Commands {
 
   var body: some Commands {
     CommandMenu("Insert") {
-      if let composer, composer.draft.isHTML {
-        Button("Image…") { composer.insertImage() }
-        Button("Table…") { composer.dialog = .table }
-        Button("Link…") { composer.dialog = .link }
-          .keyboardShortcut("k", modifiers: [.command, .shift])
-        Button("Named Anchor…") { composer.dialog = .anchor }
-        Button("Horizontal Line") { composer.exec("insertHorizontalRule") }
-        Button("HTML…") { composer.dialog = .html }
-        Button("Math…") { composer.dialog = .math }
-        Button("Characters and Symbols…") { composer.insertCharacters() }
+      let editable = composer?.draft.isHTML == true
+      Group {
+        Button("Image…") { composer?.insertImage() }
+        Button("Table…") { composer?.dialog = .table }
+        Button("Link…") { composer?.dialog = .link }
+          .shortcut("k", [.command], composer != nil)
+        Button("Named Anchor…") { composer?.dialog = .anchor }
+        Button("Horizontal Line") { composer?.exec("insertHorizontalRule") }
+        Button("HTML…") { composer?.dialog = .html }
+        Button("Mathematical Formula…") { composer?.dialog = .math }
+        Button("Characters and Symbols…") { composer?.insertCharacters() }
           .keyboardShortcut(" ", modifiers: [.command, .control])
-        Menu("Table of Contents") {
-          Button("Insert") { Task { _ = await composer.run("tb.toc('insert')") } }
-          Button("Update") { Task { _ = await composer.run("tb.toc('update')") } }
-          Button("Remove") { Task { _ = await composer.run("tb.toc('remove')") } }
+        Menu("Table of Contents…") {
+          Button("Insert") { if let composer { Task { _ = await composer.run("tb.toc('insert')") } } }
+          Button("Update") { if let composer { Task { _ = await composer.run("tb.toc('update')") } } }
+          Button("Remove") { if let composer { Task { _ = await composer.run("tb.toc('remove')") } } }
         }
         Divider()
-        Button("Break Below Image(s)") { composer.call("breakBelowImages") }
-      } else {
-        Button("Image…") {}.disabled(true)
-        Button("Table…") {}.disabled(true)
-        Button("Link…") {}.disabled(true)
-        Button("HTML…") {}.disabled(true)
+        Button("Break Below Image(s)") { composer?.call("breakBelowImages") }
       }
+      .disabled(!editable)
     }
 
     CommandMenu("Format") {
@@ -156,15 +153,33 @@ struct ComposeMenus: Commands {
         Button("Image Properties…") { composer.dialog = .imageProperties }
         Button("Page Colors and Background…") { composer.dialog = .pageColors }
       } else {
-        Button("Rich Text (HTML)") { composer?.switchFormat(toHTML: true) }
-          .disabled(composer == nil || mail.identity(for: composer!.draft)?.0.kind == .nntp)
+        Menu("Font") {}.disabled(true)
+        Menu("Size") {}.disabled(true)
+        Menu("Text Style") {}.disabled(true)
+        Button("Text Color…") {}.disabled(true)
+        Divider()
+        Button("Remove All Text Styles") {}.disabled(true)
+        Button("Remove Links") {}.disabled(true)
+        Button("Remove Named Anchors") {}.disabled(true)
+        Divider()
+        Menu("Paragraph") {}.disabled(true)
+        Menu("List") {}.disabled(true)
+        Divider()
+        Button("Increase Indent") {}.disabled(true)
+        Button("Decrease Indent") {}.disabled(true)
+        Menu("Align") {}.disabled(true)
+        Divider()
+        Menu("Table") {}.disabled(true)
+        Divider()
+        Button("Image Properties…") {}.disabled(true)
+        Button("Page Colors and Background…") {}.disabled(true)
       }
     }
 
     CommandMenu("Options") {
       if let composer {
         Button("Check Spelling…") { composer.checkSpelling() }
-          .keyboardShortcut("k", modifiers: [.command, .shift, .option])
+          .keyboardShortcut("k", modifiers: [.command, .shift])
         Toggle(
           "Spellcheck As You Type",
           isOn: Binding(get: { composer.spellcheckAsYouType }, set: { _ in composer.toggleSpellcheckAsYouType() }))
@@ -188,13 +203,14 @@ struct ComposeMenus: Commands {
           PriorityMenuItems(controller: composer)
         }
         FolderPickerMenu(title: "Send a Copy To", store: mail) { folder in composer.draft.copyToFolder = folder }
-        if composer.draft.copyToFolder != nil {
-          Button("Send a Copy to Sent (default)") { composer.draft.copyToFolder = nil }
-        }
         Divider()
         Toggle(
-          "Rich Text (HTML)",
-          isOn: Binding(get: { composer.draft.isHTML }, set: { composer.switchFormat(toHTML: $0) }))
+          "Customize From Address…",
+          isOn: Binding(
+            get: { composer.draft.customFrom != nil },
+            set: { on in
+              composer.draft.customFrom = on ? mail.identity(for: composer.draft)?.1.address.formatted ?? "" : nil
+            }))
       } else {
         Button("Check Spelling…") {}.disabled(true)
       }
@@ -244,7 +260,7 @@ struct ComposeSaveMenu: View {
       Button("Template") { Task { await composer.saveTemplate() } }
     }
     Divider()
-    Button("Send") {
+    Button("Send Now") {
       let viaShortcut = NSApp.currentEvent?.type == .keyDown
       Task { await composer.send(viaShortcut: viaShortcut) }
     }
@@ -285,16 +301,15 @@ struct ComposeFindMenu: View {
   let composer: ComposerController
 
   var body: some View {
-    Menu("Find") {
-      Button("Find…") { composer.dialog = .findReplace }
-        .keyboardShortcut("f")
-      Button("Find and Replace…") { composer.dialog = .findReplace }
-        .keyboardShortcut("f", modifiers: [.command, .option])
-      Button("Find Again") { composer.find() }
-        .keyboardShortcut("g")
-      Button("Find Previous") { composer.find(backwards: true) }
-        .keyboardShortcut("g", modifiers: [.command, .shift])
-    }
+    Divider()
+    Button("Find…") { composer.dialog = .findReplace }
+      .keyboardShortcut("f")
+    Button("Find and Replace…") { composer.dialog = .findReplace }
+      .keyboardShortcut("f", modifiers: [.command, .option])
+    Button("Find Again") { composer.find() }
+      .keyboardShortcut("g")
+    Button("Find Previous") { composer.find(backwards: true) }
+      .keyboardShortcut("g", modifiers: [.command, .shift])
   }
 }
 
@@ -316,6 +331,8 @@ struct ComposeViewMenu: View {
       Divider()
       Button("Reset") { composer.zoom = 1 }
         .keyboardShortcut("0")
+      Divider()
+      Toggle("Zoom Text Only", isOn: Binding(get: { composer.zoomTextOnly }, set: { composer.zoomTextOnly = $0 }))
     }
     Divider()
     Toggle("To Field", isOn: .constant(true)).disabled(true)
@@ -323,14 +340,10 @@ struct ComposeViewMenu: View {
       .keyboardShortcut("c", modifiers: [.command, .shift])
     Toggle("Bcc Field", isOn: Binding(get: { composer.showBcc }, set: { composer.showBcc = $0 }))
       .keyboardShortcut("b", modifiers: [.command, .shift])
-    Toggle("Reply-To Field", isOn: Binding(get: { composer.showReplyTo }, set: { composer.showReplyTo = $0 }))
-    Toggle("Newsgroup Field", isOn: Binding(get: { composer.showNewsgroups }, set: { composer.showNewsgroups = $0 }))
-    Toggle("Followup-To Field", isOn: Binding(get: { composer.showFollowupTo }, set: { composer.showFollowupTo = $0 }))
     Divider()
     Toggle("Contacts Sidebar", isOn: Binding(get: { composer.showContactsSidebar }, set: { composer.showContactsSidebar = $0 }))
       .keyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF9FunctionKey)!)), modifiers: [])
     Toggle("Attachment Pane", isOn: Binding(get: { composer.showAttachmentPane }, set: { composer.showAttachmentPane = $0 }))
       .keyboardShortcut("m", modifiers: [.command, .shift])
-    Divider()
   }
 }

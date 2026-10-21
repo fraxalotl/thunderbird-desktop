@@ -65,7 +65,18 @@ struct MainMenus: Commands {
       MessageMenuItems(store: mail, calendar: calendar, ui: ui, openWindow: openWindow, inMenuBar: true)
     }
     CommandMenu("Events and Tasks") { eventsMenu }
-    CommandMenu("Tools") { toolsMenu }
+    CommandMenu("Tools") {
+      if composer != nil {
+        Button("Mail & Newsgroups") { openWindow(id: WindowID.main); switchTo(.mail) }
+          .keyboardShortcut("1")
+        Button("Address Book") { openWindow(id: WindowID.main); switchTo(.addressBook) }
+          .keyboardShortcut("b", modifiers: [.command, .shift])
+        Divider()
+        Button("Account Settings") { settings("accounts") }
+      } else {
+        toolsMenu
+      }
+    }
     helpMenu
   }
 

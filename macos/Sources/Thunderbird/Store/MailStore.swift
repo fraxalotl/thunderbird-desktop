@@ -1518,7 +1518,7 @@ final class MailStore {
       throw MailError.server("Set up an account before sending mail.")
     }
     var message = OutgoingMessage(
-      from: identity.address,
+      from: draft.customFrom.flatMap { MailAddress.parseList($0).first } ?? identity.address,
       to: forDraft ? MailAddress.parseList(draft.to) : expandingLists(draft.to),
       cc: forDraft ? MailAddress.parseList(draft.cc) : expandingLists(draft.cc),
       bcc: forDraft ? MailAddress.parseList(draft.bcc) : expandingLists(draft.bcc),

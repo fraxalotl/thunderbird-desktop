@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
     NSApp.activate()
+    MenuBarSync.shared.start()
     UNUserNotificationCenter.current().delegate = self
     OpenPGP.passphraseProvider = { label in
       DispatchQueue.main.sync {
