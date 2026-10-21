@@ -15,7 +15,6 @@ add_task(async function test_help_menu() {
 
   for (const id of [
     "getInvolved",
-    "donationsPage",
     "feedbackPage",
     "functionsSeparator",
   ]) {
@@ -30,7 +29,6 @@ add_task(async function test_help_menu() {
 add_task(async function test_app_menu() {
   for (const id of [
     "appmenu_getInvolved",
-    "appmenu_makeDonation",
     "appmenu_submitFeedback",
   ]) {
     is(

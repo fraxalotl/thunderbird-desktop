@@ -522,11 +522,9 @@ menubar {
 /* stylelint-disable-next-line media-query-no-invalid */
 @media not -moz-pref("mail.community_features.enabled") {
   #getInvolved,
-  #donationsPage,
   #feedbackPage,
   #functionsSeparator,
   #appmenu_getInvolved,
-  #appmenu_makeDonation,
   #appmenu_submitFeedback,
   #appmenu_submitFeedback + toolbarseparator {
     display: none !important;

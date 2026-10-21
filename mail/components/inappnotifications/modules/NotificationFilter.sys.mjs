@@ -66,6 +66,11 @@ export const NotificationFilter = {
    * @returns {boolean} If this notification should be shown.
    */
   isActiveNotification(notification, seed, interactedWithIds) {
+    // Never show donation appeals ("donation", "donation_tab",
+    // "donation_browser"), regardless of policy or filter bypass.
+    if (notification.type.startsWith("donation")) {
+      return false;
+    }
     if (interactedWithIds.includes(notification.id)) {
       return false;
     }

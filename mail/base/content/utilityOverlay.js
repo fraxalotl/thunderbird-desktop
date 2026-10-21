@@ -191,12 +191,6 @@ function openLinkText(event, what) {
     case "keyboardShortcutsURL":
       openUILink("https://support.mozilla.org/kb/keyboard-shortcuts/", event);
       break;
-    case "donateURL":
-      openUILink(
-        "https://www.thunderbird.net/donate/?utm_source=thunderbird-client&utm_medium=referral&utm_content=help-menu",
-        event
-      );
-      break;
     case "feedbackURL":
       openUILink("https://connect.mozilla.org/", event);
       break;
@@ -453,7 +447,6 @@ function buildHelpMenu() {
 
   for (const id of [
     "getInvolved",
-    "donationsPage",
     "feedbackPage",
     "functionsSeparator",
   ]) {
