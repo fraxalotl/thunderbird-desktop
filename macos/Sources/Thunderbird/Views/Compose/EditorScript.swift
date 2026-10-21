@@ -65,6 +65,36 @@ enum EditorScript {
         post('dirty');
       };
 
+      const placeholderPattern = /\{\{([^{}]+)\}\}/g;
+      const previewKey = 'first line of your reply';
+      const previewLength = 90;
+      // Text nodes holding the preview placeholder, with their original text.
+      let previewNodes = [];
+      const placeholderKey = (key) => key.trim().replace(/\s+/g, ' ').toLowerCase();
+      const fillPlaceholders = (text, values) =>
+        text.replace(placeholderPattern, (match, key) => values[placeholderKey(key)] || match);
+      const textNodes = () => {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        const nodes = [];
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          if (!['STYLE', 'SCRIPT'].includes(n.parentNode.nodeName)) nodes.push(n);
+        }
+        return nodes;
+      };
+      // The first paragraph written in the reply, skipping greetings like "Hi Ben,", hidden
+      // paragraphs and those still holding a placeholder.
+      const firstLine = () => {
+        for (const p of document.body.querySelectorAll('p')) {
+          const text = p.textContent.replace(/\s+/g, ' ').trim();
+          if (!text || /\{\{[^{}]+\}\}/.test(text) || (text.length <= 40 && text.endsWith(',')) || !p.checkVisibility()) continue;
+          if (text.length <= previewLength) return text;
+          const cut = text.slice(0, previewLength);
+          const lastSpace = cut.lastIndexOf(' ');
+          return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
+        }
+        return '';
+      };
+
       const cellPosition = (cell) => {
         const row = cell.parentElement;
         return { row, table: cell.closest('table'), rowIndex: row.rowIndex, cellIndex: cell.cellIndex };
@@ -158,7 +188,26 @@ enum EditorScript {
           while (window.find(text, !!caseSensitive, false, false, false, false, false) && count < 10000) {
             document.execCommand('insertText', false, replacement); count++; }
           post('dirty'); return count;
-        }
+        },
+        // Reply with Template placeholders, with the same rules as TemplatePlaceholders.
+        fillPlaceholders: (values) => {
+          previewNodes = [];
+          for (const node of textNodes()) {
+            const text = fillPlaceholders(node.data, values);
+            if (text !== node.data) node.data = text;
+            if ([...text.matchAll(placeholderPattern)].some(([, key]) => placeholderKey(key) === previewKey)) {
+              previewNodes.push({ node, text });
+            }
+          }
+        },
+        // Redone on every send attempt, so edits made after a cancelled send are picked up. With
+        // no paragraph written yet, the placeholder is put back.
+        fillPreview: () => {
+          const values = { [previewKey]: firstLine() };
+          previewNodes.filter(({ node }) => node.isConnected).forEach(({ node, text }) => {
+            node.data = fillPlaceholders(text, values); });
+        },
+        placeholderTexts: () => textNodes().map(n => n.data).filter(t => /\{\{[^{}]+\}\}/.test(t))
       };
       state();
       post('ready');

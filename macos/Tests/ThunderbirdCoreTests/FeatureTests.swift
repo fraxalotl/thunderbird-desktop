@@ -164,6 +164,27 @@ private func summary(
   }
 }
 
+@Suite struct TemplatePlaceholderTests {
+  @Test func takesTheFirstName() {
+    #expect(TemplatePlaceholders.firstName("Ben Hoenes") == "Ben")
+    #expect(TemplatePlaceholders.firstName("Hoenes, Ben") == "Ben")
+    #expect(TemplatePlaceholders.firstName("\"Ben\"") == "Ben")
+    #expect(TemplatePlaceholders.firstName("ben@example.com") == "")
+    #expect(TemplatePlaceholders.firstName("") == "")
+  }
+
+  @Test func fillsKnownPlaceholders() {
+    let values = ["name": "Ben", "your name": "Fraser", "subject": ""]
+    let text = "Hi {{Name}}, from {{ YOUR\n  name }} about {{Subject}} and {{Other}}"
+    #expect(TemplatePlaceholders.fill(text, with: values) == "Hi Ben, from Fraser about {{Subject}} and {{Other}}")
+  }
+
+  @Test func listsUnfilledPlaceholdersOnce() {
+    let texts = ["Re: {{Subject}}", "{{First line\n of your reply}} {{Subject}}"]
+    #expect(TemplatePlaceholders.unfilled(in: texts) == ["{{Subject}}", "{{First line of your reply}}"])
+  }
+}
+
 @Suite(.serialized) struct OpenPGPTests {
   static let available: Bool = {
     let candidates = [

@@ -106,6 +106,10 @@ final class ComposerController {
     Task {
       let html = draft.htmlBody ?? "<p><br></p>"
       _ = try? await webView?.callAsyncJavaScript("tb.setHTML(html)", arguments: ["html": html], contentWorld: .page)
+      if let reply = draft.templateReply, let store {
+        _ = try? await webView?.callAsyncJavaScript(
+          "tb.fillPlaceholders(values)", arguments: ["values": store.placeholderValues(reply, for: draft)], contentWorld: .page)
+      }
       if draft.kind != .draft && draft.kind != .template {
         _ = try? await webView?.callAsyncJavaScript(
           "const s = document.body.style; if (font) s.fontFamily = font; s.fontSize = size + 'px'; s.color = color; s.backgroundColor = background;",
@@ -423,6 +427,31 @@ final class ComposerController {
     return count
   }
 
+  /// Reply with Template: fills the hidden preview text from the reply, then warns about any
+  /// placeholders that weren't filled in. Returns false if the user goes back to the message.
+  private func confirmPlaceholders() async -> Bool {
+    guard draft.templateReply != nil else { return true }
+    var texts = [draft.subject]
+    if draft.isHTML {
+      await run("tb.fillPreview()")
+      texts += await run("return tb.placeholderTexts()") as? [String] ?? []
+    } else {
+      texts.append(draft.body)
+    }
+    let placeholders = TemplatePlaceholders.unfilled(in: texts)
+    guard !placeholders.isEmpty else { return true }
+    let alert = NSAlert()
+    alert.messageText = "Your message still contains these template placeholders:"
+    alert.informativeText = placeholders.joined(separator: "\n")
+    alert.addButton(withTitle: "Send Anyway")
+    alert.addButton(withTitle: "Go Back")
+    guard alert.runModal() == .alertFirstButtonReturn else {
+      webView?.window?.makeFirstResponder(webView)
+      return false
+    }
+    return true
+  }
+
   func send(skipReminder: Bool = false, viaShortcut: Bool = false) async {
     errorTitle = "Couldn't Send Message"
     guard let store else { return }
@@ -442,6 +471,7 @@ final class ComposerController {
     {
       attachVCard()
     }
+    guard await confirmPlaceholders() else { return }
     let snapshot = await currentDraft()
     draft.body = snapshot.body
     if !skipReminder && !remindLater && Preferences.bool(Preferences.attachmentReminder) && draft.attachments.isEmpty
@@ -475,7 +505,7 @@ final class ComposerController {
 
   func sendLater() async {
     errorTitle = "Couldn't Send Message"
-    guard let store else { return }
+    guard let store, await confirmPlaceholders() else { return }
     isBusy = true
     defer { isBusy = false }
     do {

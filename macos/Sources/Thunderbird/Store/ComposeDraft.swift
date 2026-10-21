@@ -45,6 +45,15 @@ struct ComposeDraft: Codable, Hashable, Identifiable {
   var securityTechnology: SecurityTechnology?
   /// Options › Customize From Address: a one-off From address used instead of the identity's.
   var customFrom: String?
+  /// Reply with Template: the values for the template's {{Name}} and {{Subject}} placeholders.
+  var templateReply: TemplateReply?
+}
+
+struct TemplateReply: Codable, Hashable {
+  /// First name of the person being replied to.
+  var recipientName: String
+  /// Subject of the message being replied to, without "Re:".
+  var originalSubject: String
 }
 
 /// Options › Sending format.

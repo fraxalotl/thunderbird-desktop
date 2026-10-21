@@ -100,8 +100,26 @@ extension MailStore {
     draft.htmlBody = body.htmlBody
     draft.isHTML = body.isHTML
     draft.attachments = body.attachments
-    draft.subject = "Re: " + loaded.parsed.subject
+    // Like Thunderbird's database subject, without "Re:", so replies to replies don't get "Re: Re:".
+    let subject = loaded.parsed.subject.replacing(#/^(?i)(\s*re\s*(\[\d+\])?\s*:)+\s*/#, with: "")
+    draft.subject = "Re: " + subject
+    let recipients = loaded.parsed.replyTo.isEmpty ? loaded.parsed.from : loaded.parsed.replyTo
+    let reply = TemplateReply(
+      recipientName: TemplatePlaceholders.firstName(recipients.first?.name ?? ""), originalSubject: subject)
+    draft.templateReply = reply
+    if !draft.isHTML {
+      draft.body = TemplatePlaceholders.fill(draft.body, with: placeholderValues(reply, for: draft))
+    }
     return draft
+  }
+
+  /// The values for a Reply with Template's placeholders, other than the preview text.
+  func placeholderValues(_ reply: TemplateReply, for draft: ComposeDraft) -> [String: String] {
+    [
+      TemplatePlaceholders.name: reply.recipientName,
+      TemplatePlaceholders.yourName: identity(for: draft)?.1.fullName ?? "",
+      TemplatePlaceholders.subject: reply.originalSubject,
+    ]
   }
 
   /// Organize › Create Decrypted Copy In.
