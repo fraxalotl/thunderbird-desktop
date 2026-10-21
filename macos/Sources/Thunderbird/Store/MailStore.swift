@@ -1670,9 +1670,29 @@ final class MailStore {
     if let existing = folder(role: role, in: owner) {
       return FolderSelection(accountID: owner, path: existing.path)
     }
-    let path = try await backend.createFolder(name, parent: nil)
-    folders[owner] = try await backend.refreshFolders()
-    return FolderSelection(accountID: owner, path: path)
+    if let existing = folders[owner]?.first(where: { $0.isSelectable && !$0.path.hasPrefix("Labels") && ($0.path.components(separatedBy: $0.delimiter ?? "/").last ?? "").caseInsensitiveCompare(name) == .orderedSame }) {
+      return FolderSelection(accountID: owner, path: existing.path)
+    }
+    do {
+      let path = try await backend.createFolder(name, parent: nil)
+      folders[owner] = try await backend.refreshFolders()
+      return FolderSelection(accountID: owner, path: path)
+    } catch {
+      // Some servers (Proton Mail Bridge) only allow new mailboxes inside a "Folders" parent.
+      if let parent = folders[owner]?.first(where: { $0.path.caseInsensitiveCompare("Folders") == .orderedSame }),
+        let path = try? await backend.createFolder(name, parent: parent.path)
+      {
+        folders[owner] = (try? await backend.refreshFolders()) ?? folders[owner]
+        return FolderSelection(accountID: owner, path: path)
+      }
+      guard owner != localFoldersID, let localID = localFoldersID, let local = backends[localID] else { throw error }
+      if let existing = folder(role: role, in: localID) {
+        return FolderSelection(accountID: localID, path: existing.path)
+      }
+      let path = try await local.createFolder(name, parent: nil)
+      folders[localID] = try await local.refreshFolders()
+      return FolderSelection(accountID: localID, path: path)
+    }
   }
 
   /// Queues a message in Local Folders › Unsent Messages to send later.

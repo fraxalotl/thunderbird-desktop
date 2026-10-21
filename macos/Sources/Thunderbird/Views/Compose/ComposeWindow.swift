@@ -80,7 +80,7 @@ struct ComposeWindow: View {
       return !files.isEmpty
     }
     .alert(
-      "Couldn't Send Message",
+      controller.errorTitle,
       isPresented: Binding(get: { controller.errorMessage != nil }, set: { if !$0 { controller.errorMessage = nil } }),
       presenting: controller.errorMessage
     ) { _ in

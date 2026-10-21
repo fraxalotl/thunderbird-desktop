@@ -28,6 +28,7 @@ final class ComposerController {
   var sent = false
   var lastSaved: Date?
   var errorMessage: String?
+  var errorTitle = "Couldn't Send Message"
   var confirmingNoAttachment = false
   var dialog: ComposeDialog?
   var attachmentToRename: URL?
@@ -423,6 +424,7 @@ final class ComposerController {
   }
 
   func send(skipReminder: Bool = false, viaShortcut: Bool = false) async {
+    errorTitle = "Couldn't Send Message"
     guard let store else { return }
     if viaShortcut && Preferences.bool(Preferences.confirmSendShortcut) {
       let alert = NSAlert()
@@ -472,6 +474,7 @@ final class ComposerController {
   }
 
   func sendLater() async {
+    errorTitle = "Couldn't Send Message"
     guard let store else { return }
     isBusy = true
     defer { isBusy = false }
@@ -491,7 +494,10 @@ final class ComposerController {
       isDirty = false
       lastSaved = Date()
     } catch {
-      if !silently { errorMessage = error.localizedDescription }
+      if !silently {
+        errorTitle = "Couldn't Save Draft"
+        errorMessage = error.localizedDescription
+      }
     }
   }
 
@@ -499,6 +505,7 @@ final class ComposerController {
     do {
       try await store?.saveDraft(await currentDraft(), asTemplate: true)
     } catch {
+      errorTitle = "Couldn't Save Template"
       errorMessage = error.localizedDescription
     }
   }
