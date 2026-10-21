@@ -88,3 +88,16 @@ import Testing
     #expect(FeedParser.discoverFeedURL(inHTML: html, base: URL(string: "https://example.com/blog/")!)?.absoluteString == "https://example.com/feed.xml")
   }
 }
+
+@Suite struct LocalFoldersTests {
+  @Test func topLevelSpecialFoldersGetTheirRole() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "tb-local-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let backend = LocalBackend(accountID: UUID(), root: root, defaultFolders: LocalBackend.localFoldersDefaults)
+    _ = try await backend.createFolder("Templates", parent: nil)
+    _ = try await backend.createFolder("Templates", parent: "Trash")
+    let folders = try await backend.refreshFolders()
+    #expect(folders.first { $0.path == "Templates" }?.role == .templates)
+    #expect(folders.first { $0.path == "Trash/Templates" }?.role == .normal)
+  }
+}

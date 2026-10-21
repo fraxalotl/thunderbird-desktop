@@ -48,8 +48,19 @@ public actor LocalBackend: MailBackend {
 
   private func loadFolders() -> [RemoteFolder] {
     if let data = try? Data(contentsOf: foldersURL),
-      let folders = try? JSONDecoder().decode([RemoteFolder].self, from: data)
+      var folders = try? JSONDecoder().decode([RemoteFolder].self, from: data)
     {
+      // Top-level folders named Drafts, Templates, Sent and so on are special folders, as in
+      // Thunderbird's Local Folders; older stores saved them as plain folders.
+      var changed = false
+      for index in folders.indices where folders[index].role == .normal && !folders[index].path.contains("/") {
+        let role = RemoteFolder.detectRole(path: folders[index].path, delimiter: "/", attributes: [])
+        if role != .normal {
+          folders[index].role = role
+          changed = true
+        }
+      }
+      if changed { saveFolders(folders) }
       return folders
     }
     let folders = defaultFolders.map { RemoteFolder(path: $0.0, delimiter: "/", attributes: [], role: $0.1) }
@@ -202,7 +213,8 @@ public actor LocalBackend: MailBackend {
     var folders = loadFolders()
     let path = parent.map { "\($0)/\(name)" } ?? name
     guard !folders.contains(where: { $0.path == path }) else { return path }
-    folders.append(RemoteFolder(path: path, delimiter: "/", attributes: [], role: .normal))
+    let role = parent == nil ? RemoteFolder.detectRole(path: path, delimiter: "/", attributes: []) : .normal
+    folders.append(RemoteFolder(path: path, delimiter: "/", attributes: [], role: role))
     saveFolders(folders)
     return path
   }
