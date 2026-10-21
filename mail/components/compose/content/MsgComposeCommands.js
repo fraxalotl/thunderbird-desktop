@@ -107,6 +107,8 @@ ChromeUtils.defineESModuleGetters(
   {
     ComposeShortcuts:
       "moz-src:///comm/mail/components/compose/content/modules/composeShortcuts.mjs",
+    ReplyWithTemplate:
+      "moz-src:///comm/mail/components/compose/content/modules/replyWithTemplate.mjs",
   },
   { global: "current" }
 );
@@ -630,9 +632,10 @@ var stateListener = {
       case Ci.nsIMsgCompType.EditTemplate:
         defaultSaveOperation = "template";
         break;
+      // For ReplyWithTemplate the body is the template, not a quote, so leave
+      // it as it is.
       case Ci.nsIMsgCompType.Draft:
       case Ci.nsIMsgCompType.Template:
-      // The body is the template, not a quote, so leave it as it is.
       case Ci.nsIMsgCompType.ReplyWithTemplate:
       case Ci.nsIMsgCompType.EditAsNew:
         break;
@@ -661,6 +664,13 @@ var stateListener = {
 
       editor.enableUndo(true);
       editor.resetModificationCount();
+    }
+    // Done after the identity switch, so {{Your name}} uses the final identity.
+    if (gComposeType == Ci.nsIMsgCompType.ReplyWithTemplate) {
+      lazy.ReplyWithTemplate.fillPlaceholders(
+        getBrowser().contentDocument,
+        gCurrentIdentity?.fullName ?? ""
+      );
     }
     if (gMsgCompose.composeHTML) {
       const doc = getBrowser().contentDocument;
@@ -4598,48 +4608,6 @@ function onPasteOrDrop(e) {
   }
 }
 
-/**
- * Check whether the compose window was opened with "Reply with Template".
- * Templates are always opened through the template code path, which passes
- * along the header given to OpenComposeWindow() as origMsgHdr. For a plain
- * template that is the template itself, for a reply it is the message being
- * replied to.
- *
- * @param {nsIMsgComposeParams} params
- * @returns {boolean}
- */
-function isReplyWithTemplate(params) {
-  const hdr = params.type == Ci.nsIMsgCompType.Template && params.origMsgHdr;
-  return (
-    !!hdr?.folder &&
-    !(hdr.flags & Ci.nsMsgMessageFlags.Template) &&
-    !hdr.folder.isSpecialFolder(Ci.nsMsgFolderFlags.Templates, true)
-  );
-}
-
-/**
- * Turn a template compose into a reply to params.origMsgHdr, keeping the
- * template's body and attachments.
- *
- * @param {nsIMsgComposeParams} params
- */
-function setupReplyWithTemplate(params) {
-  const hdr = params.origMsgHdr;
-  const fields = params.composeFields;
-
-  params.type = Ci.nsIMsgCompType.ReplyWithTemplate;
-  // Used for the References header, the Replied flag and Fcc.
-  params.originalMsgURI = hdr.folder.getUriForMsg(hdr);
-
-  fields.to = MailServices.headerParser
-    .parseEncodedHeaderW(hdr.getStringProperty("replyTo") || hdr.author)
-    .join(", ");
-  fields.subject = "Re: " + hdr.mime2DecodedSubject;
-  // Reply from the identity picked for the original message, not the one
-  // that saved the template.
-  fields.from = "";
-}
-
 /* eslint-disable complexity */
 async function ComposeStartup() {
   // Findbar overlay
@@ -4916,8 +4884,8 @@ async function ComposeStartup() {
     }
   }
 
-  if (isReplyWithTemplate(params)) {
-    setupReplyWithTemplate(params);
+  if (lazy.ReplyWithTemplate.isReplyWithTemplate(params)) {
+    lazy.ReplyWithTemplate.setup(params);
   }
 
   gComposeType = params.type;
@@ -6340,6 +6308,48 @@ async function GenericSendMessage(msgType) {
         ) {
           document.getElementById("msgSubject").focus();
           throw new Error(`Send aborted by the user: subject missing`);
+        }
+      }
+
+      // Reply with Template: fill the hidden preview text from the reply,
+      // then warn about any placeholders that weren't filled in.
+      if (gComposeType == Ci.nsIMsgCompType.ReplyWithTemplate) {
+        const doc = getBrowser().contentDocument;
+        lazy.ReplyWithTemplate.fillPreview(doc);
+        const placeholders = lazy.ReplyWithTemplate.getUnfilledPlaceholders(
+          doc,
+          subject
+        );
+        if (placeholders.length) {
+          const [title, message, sendButton, cancelButton] =
+            await document.l10n.formatValues([
+              "compose-template-placeholders-title",
+              {
+                id: "compose-template-placeholders-prompt",
+                args: { placeholders: placeholders.join("\n") },
+              },
+              "compose-template-placeholders-send-button",
+              "compose-template-placeholders-cancel-button",
+            ]);
+          if (
+            Services.prompt.confirmEx(
+              window,
+              title,
+              message,
+              Services.prompt.BUTTON_TITLE_IS_STRING *
+                Services.prompt.BUTTON_POS_0 +
+                Services.prompt.BUTTON_TITLE_IS_STRING *
+                  Services.prompt.BUTTON_POS_1,
+              sendButton,
+              cancelButton,
+              null,
+              null,
+              { value: 0 }
+            ) == 1
+          ) {
+            focusMsgBody();
+            throw new Error(`Send aborted by the user: placeholders left`);
+          }
         }
       }
 

@@ -39,6 +39,15 @@ compose-empty-subject-prompt = Your message doesn’t have a subject.
 compose-empty-subject-send-button = &Send Without Subject
 compose-empty-subject-cancel-button = &Cancel Sending
 
+compose-template-placeholders-title = Template Placeholders
+# $placeholders (String) - The placeholders left in the message, one per line.
+compose-template-placeholders-prompt =
+    Your message still contains these template placeholders:
+
+    { $placeholders }
+compose-template-placeholders-send-button = &Send Anyway
+compose-template-placeholders-cancel-button = &Go Back
+
 compose-attachment-reminder-title = Attachment Reminder
 compose-attachment-reminder-prompt = Did you forget to add an attachment?
 compose-attachment-reminder-send-button = No, Send Now

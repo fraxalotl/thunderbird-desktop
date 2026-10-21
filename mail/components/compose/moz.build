@@ -15,4 +15,5 @@ BROWSER_CHROME_MANIFESTS += [
 
 MOZ_SRC_FILES += [
     "content/modules/composeShortcuts.mjs",
+    "content/modules/replyWithTemplate.mjs",
 ]
