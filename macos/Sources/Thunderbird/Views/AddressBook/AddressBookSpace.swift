@@ -88,7 +88,7 @@ struct AddressBookSpace: View {
         if !contacts.isAuthorized && contacts.selection != .collected {
           PermissionView(
             title: "Use Your Contacts", symbol: "person.crop.rectangle.stack",
-            message: "Thunderbird uses the contacts on this Mac, including iCloud, Google and CardDAV address books, and suggests them as you type.",
+            message: "Zapdos uses the contacts on this Mac, including iCloud, Google and CardDAV address books, and suggests them as you type.",
             action: { await contacts.requestAccess() })
         } else if contacts.visibleContacts.isEmpty {
           ContentUnavailableView("No Contacts", systemImage: "person.crop.circle.badge.questionmark")

@@ -30,7 +30,7 @@ struct WelcomeView: View {
           .frame(width: 112, height: 112)
           .shadow(radius: 12, y: 6)
         VStack(spacing: 6) {
-          Text("Welcome to Thunderbird")
+          Text("Welcome to Zapdos")
             .font(.largeTitle.weight(.bold))
           Text("Free, private email, now native on your Mac.")
             .font(.title3)

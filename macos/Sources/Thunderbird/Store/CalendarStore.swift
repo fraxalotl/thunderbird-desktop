@@ -279,7 +279,7 @@ final class CalendarStore {
 
   /// Adds an invitation from an email to the default calendar.
   func importInvitation(_ invitation: CalendarInvitation) throws {
-    if !hasEventAccess { throw MailError.server("Allow Thunderbird to use your calendars first.") }
+    if !hasEventAccess { throw MailError.server("Allow Zapdos to use your calendars first.") }
     let existing = store.events(
       matching: store.predicateForEvents(withStart: invitation.start.addingTimeInterval(-60), end: invitation.end.addingTimeInterval(60), calendars: nil)
     ).first { $0.title == invitation.summary }
@@ -393,7 +393,7 @@ final class CalendarStore {
 
   /// Creates a task from an email, as Thunderbird's "Convert To › Task" does.
   func createTask(from loaded: LoadedMessage) throws {
-    if !hasReminderAccess { throw MailError.server("Allow Thunderbird to use your reminders first.") }
+    if !hasReminderAccess { throw MailError.server("Allow Zapdos to use your reminders first.") }
     var draft = taskDraft(for: nil)
     draft.title = loaded.parsed.subject
     draft.notes = String(loaded.parsed.plainText.prefix(4000))
@@ -493,7 +493,7 @@ final class CalendarStore {
     let start = Calendar.current.date(byAdding: .year, value: -1, to: Date())!
     let end = Calendar.current.date(byAdding: .year, value: 2, to: Date())!
     let events = store.events(matching: store.predicateForEvents(withStart: start, end: end, calendars: visibleCalendars))
-    var lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Mozilla.org/NONSGML Thunderbird for macOS//EN"]
+    var lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Mozilla.org/NONSGML Zapdos//EN"]
     for event in events {
       lines += ["BEGIN:VEVENT", "UID:\(event.calendarItemExternalIdentifier ?? UUID().uuidString)",
         "DTSTAMP:\(ICalendar.formatUTC(Date()))"]

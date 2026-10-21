@@ -198,7 +198,7 @@ public actor IRCClient: ChatConnection {
       try await write("CAP REQ :sasl")
     }
     try await write("NICK \(nick)")
-    try await write("USER \(account.username) 0 * :Thunderbird for macOS")
+    try await write("USER \(account.username) 0 * :Zapdos")
     readTask = Task { await self.readLoop() }
   }
 
@@ -365,7 +365,7 @@ public actor IRCClient: ChatConnection {
   }
 
   public func disconnect() async {
-    try? await write("QUIT :Thunderbird for macOS")
+    try? await write("QUIT :Zapdos")
     readTask?.cancel()
     await connection?.close()
     connection = nil
@@ -447,7 +447,7 @@ public actor MatrixClient: ChatConnection {
         "type": "m.login.password",
         "identifier": ["type": "m.id.user", "user": localpart],
         "password": password,
-        "initial_device_display_name": "Thunderbird for macOS",
+        "initial_device_display_name": "Zapdos",
       ])
     accessToken = login["access_token"] as? String
     userID = login["user_id"] as? String ?? account.username
@@ -739,7 +739,7 @@ public actor XMPPClient: ChatConnection {
     try await openStream()
     _ = try await waitFor("stream_features")
     try await send(
-      raw: "<iq type='set' id='bind'><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'><resource>Thunderbird</resource></bind></iq>")
+      raw: "<iq type='set' id='bind'><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'><resource>Zapdos</resource></bind></iq>")
     let bound = try await waitFor("iq")
     jid = bound.elements(forName: "bind").first?.elements(forName: "jid").first?.stringValue ?? account.username
     try await send(raw: "<iq type='get' id='roster'><query xmlns='jabber:iq:roster'/></iq>")

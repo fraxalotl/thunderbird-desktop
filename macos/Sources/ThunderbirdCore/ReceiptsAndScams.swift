@@ -35,7 +35,7 @@ public enum ReturnReceipt {
       "Content-Type: message/disposition-notification; name=\"MDNPart2.txt\"",
       "Content-Disposition: inline",
       "",
-      "Reporting-UA: Thunderbird for macOS",
+      "Reporting-UA: Zapdos",
       "Final-Recipient: rfc822;\(sender.email)",
       "Original-Message-ID: \(original)",
       "Disposition: manual-action/MDN-sent-manually; displayed",

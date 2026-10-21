@@ -83,7 +83,7 @@ struct TroubleshootingWindow: View {
   private var report: String {
     let info = Bundle.main.infoDictionary ?? [:]
     var lines = [
-      "Application: Thunderbird for macOS \(info["CFBundleShortVersionString"] as? String ?? "") (\(info["CFBundleVersion"] as? String ?? ""))",
+      "Application: Zapdos \(info["CFBundleShortVersionString"] as? String ?? "") (\(info["CFBundleVersion"] as? String ?? ""))",
       "Bundle identifier: \(Bundle.main.bundleIdentifier ?? "")",
       "macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)",
       "OpenPGP library: \(OpenPGP.shared.libraryPath ?? "not found") (\(OpenPGP.shared.isAvailable ? "available" : "unavailable"))",
@@ -161,7 +161,7 @@ struct ImportExportWindow: View {
         importRow("Mail", "Messages from mbox or .eml files into Local Folders.", symbol: "tray.and.arrow.down") { importMail() }
         importRow("Address book", "Contacts from vCard (.vcf) files.", symbol: "person.crop.rectangle.stack") { importContacts() }
         importRow("Calendar", "Events from iCalendar (.ics) files.", symbol: "calendar") { calendar.importCalendarFile() }
-        importRow("Thunderbird for macOS export", "A zip file made with Tools › Export.", symbol: "doc.zipper") { importExport() }
+        importRow("Zapdos export", "A zip file made with Tools › Export.", symbol: "doc.zipper") { importExport() }
       }
       if let status {
         Text(status).foregroundStyle(.secondary)
@@ -205,7 +205,7 @@ struct ImportExportWindow: View {
 
   private func export() {
     let panel = NSSavePanel()
-    panel.nameFieldStringValue = "Thunderbird for macOS Export.zip"
+    panel.nameFieldStringValue = "Zapdos Export.zip"
     guard panel.runModal() == .OK, let url = panel.url else { return }
     let staging = FileManager.default.temporaryDirectory.appending(path: "tb-export-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
@@ -235,7 +235,7 @@ struct ImportExportWindow: View {
     if FileManager.default.fileExists(atPath: preferences.path) {
       _ = run("/usr/bin/defaults", ["import", "net.thunderbird.mac", preferences.path])
     }
-    status = "Imported. Quit and reopen Thunderbird to finish. You'll be asked for account passwords."
+    status = "Imported. Quit and reopen Zapdos to finish. You'll be asked for account passwords."
   }
 
   private func importContacts() {

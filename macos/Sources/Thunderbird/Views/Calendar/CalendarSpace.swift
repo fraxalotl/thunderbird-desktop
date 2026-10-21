@@ -17,7 +17,7 @@ struct CalendarSpace: View {
       if !calendar.hasEventAccess {
         PermissionView(
           title: "Use Your Calendars", symbol: "calendar",
-          message: "Thunderbird shows and edits the calendars you already use on this Mac, including iCloud, Google, Exchange and CalDAV calendars.",
+          message: "Zapdos shows and edits the calendars you already use on this Mac, including iCloud, Google, Exchange and CalDAV calendars.",
           action: { await calendar.requestEventAccess() })
       } else {
         NavigationSplitView {

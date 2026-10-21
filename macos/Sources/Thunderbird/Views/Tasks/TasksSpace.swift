@@ -16,7 +16,7 @@ struct TasksSpace: View {
     if !calendar.hasReminderAccess {
       PermissionView(
         title: "Use Your Tasks", symbol: "checklist",
-        message: "Thunderbird shows and edits the reminder lists you already use on this Mac, including iCloud and CalDAV task lists.",
+        message: "Zapdos shows and edits the reminder lists you already use on this Mac, including iCloud and CalDAV task lists.",
         action: { await calendar.requestReminderAccess() })
     } else {
       NavigationSplitView {

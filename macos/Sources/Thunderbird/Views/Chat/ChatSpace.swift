@@ -21,7 +21,7 @@ struct ChatSpace: View {
             .foregroundStyle(.tint)
           Text("Chat")
             .font(.title2.weight(.semibold))
-          Text("Connect to IRC, Matrix or XMPP to chat right inside Thunderbird.")
+          Text("Connect to IRC, Matrix or XMPP to chat right inside Zapdos.")
             .foregroundStyle(.secondary)
           Button("Add Chat Account") { addingAccount = true }
             .buttonStyle(.glassProminent)

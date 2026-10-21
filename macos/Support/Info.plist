@@ -8,9 +8,9 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>Thunderbird</string>
+  <string>Zapdos</string>
   <key>CFBundleExecutable</key>
-  <string>Thunderbird</string>
+  <string>Zapdos</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
@@ -18,7 +18,7 @@
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Thunderbird</string>
+  <string>Zapdos</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -37,18 +37,18 @@
     </dict>
   </array>
   <key>NSContactsUsageDescription</key>
-  <string>Thunderbird shows your contacts in the Address Book and suggests addresses as you write.</string>
+  <string>Zapdos shows your contacts in the Address Book and suggests addresses as you write.</string>
   <key>NSCalendarsFullAccessUsageDescription</key>
-  <string>Thunderbird shows and edits your calendars and adds invitations you receive by email.</string>
+  <string>Zapdos shows and edits your calendars and adds invitations you receive by email.</string>
   <key>NSRemindersFullAccessUsageDescription</key>
-  <string>Thunderbird shows and edits your tasks.</string>
+  <string>Zapdos shows and edits your tasks.</string>
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>
       <key>UTTypeIdentifier</key>
       <string>net.thunderbird.mac.messages</string>
       <key>UTTypeDescription</key>
-      <string>Thunderbird Messages</string>
+      <string>Zapdos Messages</string>
       <key>UTTypeConformsTo</key>
       <array>
         <string>public.data</string>

@@ -160,7 +160,7 @@ public struct OutgoingMessage: Sendable {
       lines.append("\(header.name): \(header.value)")
     }
     lines.append("MIME-Version: 1.0")
-    lines.append("User-Agent: Thunderbird for macOS")
+    lines.append("User-Agent: Zapdos")
 
     var entityLines = bodyEntity()
     if hideSubject {

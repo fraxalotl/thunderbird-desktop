@@ -284,7 +284,7 @@ extension MailStore {
     guard loaded.account.kind == .nntp, let messageID = loaded.parsed.messageID else { return }
     var message = OutgoingMessage(
       from: loaded.parsed.from.first ?? loaded.account.address, to: [], subject: "cancel \(messageID)",
-      body: "This message was cancelled from within Thunderbird.")
+      body: "This message was cancelled from within Zapdos.")
     message.newsgroups = (loaded.parsed.headers["Newsgroups"] ?? "").split(separator: ",").map {
       $0.trimmingCharacters(in: .whitespaces)
     }

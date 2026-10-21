@@ -66,7 +66,7 @@ struct ThunderbirdApp: App {
   @State private var chat = ChatStore()
 
   var body: some Scene {
-    Window("Thunderbird", id: WindowID.main) {
+    Window("Zapdos", id: WindowID.main) {
       MainWindow()
         .environments(mail, contacts, calendar, chat)
         .onAppear {

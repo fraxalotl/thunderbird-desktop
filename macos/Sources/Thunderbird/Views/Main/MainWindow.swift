@@ -501,7 +501,7 @@ private struct StatusBar: View {
           .foregroundStyle(store.isOffline ? .orange : .secondary)
       }
       .buttonStyle(.plain)
-      .help(store.isOffline ? "Thunderbird is offline. Click to go online." : "Thunderbird is online. Click to work offline.")
+      .help(store.isOffline ? "Zapdos is offline. Click to go online." : "Zapdos is online. Click to work offline.")
       .accessibilityLabel(store.isOffline ? "Go online" : "Work offline")
       Text(store.activity ?? (store.refreshing.isEmpty ? "Done" : "Checking for new messages…"))
         .lineLimit(1)

@@ -248,7 +248,7 @@ public enum ICalendar {
   ) -> String {
     var lines = [
       "BEGIN:VCALENDAR",
-      "PRODID:-//Mozilla.org/NONSGML Thunderbird for macOS//EN",
+      "PRODID:-//Mozilla.org/NONSGML Zapdos//EN",
       "VERSION:2.0",
       "METHOD:REPLY",
       "BEGIN:VEVENT",

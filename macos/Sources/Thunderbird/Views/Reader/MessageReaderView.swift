@@ -604,7 +604,7 @@ private struct RemoteContentBar: View {
   var body: some View {
     HStack(spacing: 10) {
       Image(systemName: "shield.lefthalf.filled")
-      Text("Thunderbird blocked remote content in this message to protect your privacy.")
+      Text("Zapdos blocked remote content in this message to protect your privacy.")
         .font(.callout)
         .lineLimit(2)
       Spacer()
@@ -763,7 +763,7 @@ private struct MailStartPage: View {
       Image(nsImage: NSApp.applicationIconImage)
         .resizable()
         .frame(width: 88, height: 88)
-      Text("Thunderbird")
+      Text("Zapdos")
         .font(.largeTitle.weight(.semibold))
       let unread = store.unifiedUnread(.inbox)
       Text(unread > 0 ? "You have \(unread) unread message\(unread == 1 ? "" : "s") in your inboxes." : "No message selected.")

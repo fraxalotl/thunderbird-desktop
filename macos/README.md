@@ -1,6 +1,6 @@
-# Thunderbird for macOS (native)
+# Zapdos for macOS (native)
 
-A native SwiftUI rewrite of the Thunderbird desktop client for macOS 26, using Liquid Glass.
+Zapdos is a native SwiftUI rewrite of the Thunderbird desktop client for macOS 26, using Liquid Glass.
 It is a standalone Swift package and does not use the Gecko build (`mach`).
 
 ## Building
@@ -8,15 +8,18 @@ It is a standalone Swift package and does not use the Gecko build (`mach`).
 Requires Xcode 26 (Swift 6.2) on macOS 26.
 
 ```sh
-./build-app.sh          # release build -> build/Thunderbird.app
+./build-app.sh          # release build -> build/Zapdos.app
 ./build-app.sh debug
 swift test              # unit tests
 ```
 
-`build-app.sh` wraps the SwiftPM executable in an app bundle that uses the icon from
-`mail/branding/thunderbird`. It also bundles `librnp.dylib` (OpenPGP) from a local Thunderbird
-build (`obj-*/dist/bin`) or an installed Thunderbird. The bundle identifier is
-`net.thunderbird.mac`, so it does not clash with the Gecko build of Thunderbird.
+`build-app.sh` wraps the SwiftPM executable in an app bundle that uses `Support/AppIcon.icns`.
+After changing `Support/AppIcon.svg`, regenerate it with
+`swift Support/make-icon.swift Support/AppIcon.svg Support/AppIcon.icns`. It also bundles
+`librnp.dylib` (OpenPGP) from a local Thunderbird build (`obj-*/dist/bin`) or an installed
+Thunderbird. The bundle identifier is
+`net.thunderbird.mac`, so it does not clash with the Gecko build of Thunderbird. App data stays
+in `~/Library/Application Support/Thunderbird for macOS`, as in builds from before the rename.
 
 Ad-hoc signed builds look like a different app to Keychain after every rebuild, so macOS asks
 before releasing saved passwords. To avoid that, sign with a development identity: add a free
@@ -120,7 +123,7 @@ with sample mail and a sample newsgroup. In a debug build, launching with
 `TB_DEMO_ACCOUNTS=remove` takes them away again:
 
 ```sh
-open --env TB_DEMO_ACCOUNTS=1 build/Thunderbird.app
+open --env TB_DEMO_ACCOUNTS=1 build/Zapdos.app
 ```
 
 To run the integration tests against the fake servers, and the OpenPGP tests against a

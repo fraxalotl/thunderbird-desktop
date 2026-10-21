@@ -26,7 +26,7 @@ struct AccountSetupView: View {
 
     var subtitle: String {
       switch self {
-      case .email: "Thunderbird will look up your provider's settings for you."
+      case .email: "Zapdos will look up your provider's settings for you."
       case .exchange: "Connects to Exchange and Microsoft 365 with Exchange Web Services."
       case .news: "Read and post to Usenet newsgroups."
       case .feeds: "Follow websites and blogs with RSS and Atom."
@@ -359,7 +359,7 @@ private struct EmailSetup: View {
       Section {
         Label(
           discovered.source == .guess
-            ? "No configuration was found, so Thunderbird guessed common settings. Check them before continuing."
+            ? "No configuration was found, so Zapdos guessed common settings. Check them before continuing."
             : "Configuration found using \(discovered.source.rawValue)\(discovered.providerName.map { " (\($0))" } ?? "").",
           systemImage: discovered.source == .guess ? "questionmark.circle" : "checkmark.seal.fill"
         )

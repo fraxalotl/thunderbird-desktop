@@ -3,22 +3,22 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-# Builds Thunderbird.app from the Swift package. Usage: ./build-app.sh [debug|release]
+# Builds Zapdos.app from the Swift package. Usage: ./build-app.sh [debug|release]
 
 set -eu
 
 cd "$(dirname "$0")"
 CONFIGURATION="${1:-release}"
-APP="build/Thunderbird.app"
+APP="build/Zapdos.app"
 
 swift build -c "$CONFIGURATION" --product Thunderbird
 BIN_DIR="$(swift build -c "$CONFIGURATION" --show-bin-path)"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN_DIR/Thunderbird" "$APP/Contents/MacOS/Thunderbird"
+cp "$BIN_DIR/Thunderbird" "$APP/Contents/MacOS/Zapdos"
 cp Support/Info.plist "$APP/Contents/Info.plist"
-cp ../mail/branding/thunderbird/thunderbird.icns "$APP/Contents/Resources/AppIcon.icns"
+cp Support/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # OpenPGP uses RNP, the library Thunderbird bundles. Take it from a local Thunderbird build,
 # or an installed Thunderbird, if one is available.

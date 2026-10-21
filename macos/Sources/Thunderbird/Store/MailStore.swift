@@ -488,12 +488,12 @@ final class MailStore {
 
   var sourceTitle: String {
     switch source {
-    case .folder: currentFolder?.displayName ?? "Thunderbird"
+    case .folder: currentFolder?.displayName ?? "Zapdos"
     case .unified(let role): "Unified \(role == .inbox ? "Inbox" : role.rawValue.capitalized)"
     case .savedSearch(let id): savedSearches.first { $0.id == id }?.name ?? "Saved Search"
     case .searchResults: "Search Results"
     case .tag(let keyword): MessageTagStore.shared.tag(keyword)?.name ?? keyword
-    case nil: "Thunderbird"
+    case nil: "Zapdos"
     }
   }
 

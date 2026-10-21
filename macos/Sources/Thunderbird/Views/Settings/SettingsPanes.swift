@@ -24,8 +24,8 @@ struct GeneralSettings: View {
 
   var body: some View {
     Form {
-      Section("Thunderbird Start Page") {
-        Toggle("When Thunderbird launches, show the Start Page in the message area", isOn: $showStartPage)
+      Section("Zapdos Start Page") {
+        Toggle("When Zapdos launches, show the Start Page in the message area", isOn: $showStartPage)
       }
       Section("Incoming Mail") {
         Picker("Default check for new messages every", selection: $checkInterval) {
@@ -204,7 +204,7 @@ struct PrivacySettings: View {
         Toggle("Tell me if the message I'm reading is a suspected email scam", isOn: $scamDetection)
       }
       Section("Passwords") {
-        Text("Thunderbird stores account passwords in your login keychain.")
+        Text("Zapdos stores account passwords in your login keychain.")
           .foregroundStyle(.secondary)
         Button("Open Keychain Access") {
           NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Keychain Access.app"))
