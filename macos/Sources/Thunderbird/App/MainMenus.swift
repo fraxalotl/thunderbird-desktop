@@ -545,7 +545,6 @@ struct MainMenus: Commands {
       }
       Divider()
       Button("Get Involved") { openURL(URL(string: "https://www.thunderbird.net/participate/")!) }
-      Button("Make a Donation") { openURL(URL(string: "https://www.thunderbird.net/donate/")!) }
       Button("Share Ideas and Feedback") { openURL(URL(string: "https://connect.mozilla.org/")!) }
       Divider()
       Button("Troubleshooting Information") { openWindow(id: WindowID.troubleshooting) }
