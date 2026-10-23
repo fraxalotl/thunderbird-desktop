@@ -439,7 +439,7 @@ pref("mailnews.open_window_warning", 10);
 // warn user if they attempt to open more than this many messages at once
 pref("mailnews.open_tab_warning", 20);
 
-pref("mailnews.start_page.enabled", true);
+pref("mailnews.start_page.enabled", false);
 
 pref("mailnews.scroll_to_new_message", true);
 
