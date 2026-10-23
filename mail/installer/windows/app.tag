@@ -1,4 +1,4 @@
 ;!@Install@!UTF-8!
-Title="Mozilla Thunderbird"
+Title="Zapdos"
 RunProgram="setup.exe"
 ;!@InstallEnd@!

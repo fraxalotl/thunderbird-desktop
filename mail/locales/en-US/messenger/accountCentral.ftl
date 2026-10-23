@@ -50,9 +50,9 @@ import-paragraph2 = { -brand-short-name } lets you import mail messages, address
 import-label = Import
     .aria-label = Import data from other programs
 
-about-paragraph = Thunderbird is the leading open source, cross-platform email and calendaring client, free for business and personal use. We want it to stay secure and become even better. A donation will allow us to hire developers, pay for infrastructure, and continue to improve.
+about-paragraph = { -brand-short-name } is the leading open source, cross-platform email and calendaring client, free for business and personal use. We want it to stay secure and become even better. A donation will allow us to hire developers, pay for infrastructure, and continue to improve.
 
-about-paragraph-consider-donation = <b>Thunderbird is funded by users like you! If you like Thunderbird, please consider making a donation.</b> The best way for you to ensure Thunderbird remains available is to <a data-l10n-name="donation-link"> make a donation</a>.
+about-paragraph-consider-donation = <b>{ -brand-short-name } is funded by users like you! If you like { -brand-short-name }, please consider making a donation.</b> The best way for you to ensure { -brand-short-name } remains available is to <a data-l10n-name="donation-link"> make a donation</a>.
 
 support-link = Support
 involved-link = Get Involved

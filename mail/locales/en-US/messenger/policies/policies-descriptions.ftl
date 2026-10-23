@@ -69,7 +69,7 @@ policy-DisablePasswordReveal2 = Do not allow passwords to be revealed in saved l
 
 policy-DisableProfileImport = Disable the menu command to Import data from another application.
 
-policy-DisableExperimentalFeatures = Disable experimental features in Thunderbird.
+policy-DisableExperimentalFeatures = Disable experimental features in { -brand-short-name }.
 
 policy-DisableQRExport = Disable the generation of the QR code to export account settings and credentials.
 

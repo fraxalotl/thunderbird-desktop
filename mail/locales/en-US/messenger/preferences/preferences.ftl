@@ -1429,7 +1429,7 @@ accent-color-os =
     .label = Follow operating system
 
 accent-color-thunderbird =
-    .label = Thunderbird blue
+    .label = Zapdos blue
 
 accent-color-purple =
     .label = Purple

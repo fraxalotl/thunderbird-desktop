@@ -2,7 +2,7 @@
 
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
 
-<Product Name="Mozilla Thunderbird $(var.Version) $(var.Architecture) $(var.AB_CD)"
+<Product Name="Zapdos $(var.Version) $(var.Architecture) $(var.AB_CD)"
          Manufacturer="*" Language="0" Codepage="1252"
          Version="$(var.EmbeddedVersionCode)" Id="18d4d2f4-b394-48a2-8886-9c68180cead5"
          UpgradeCode="53ba97bb-f0fb-476d-baf5-e2d649f39a31" >
