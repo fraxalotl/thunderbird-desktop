@@ -5018,6 +5018,11 @@ async function ComposeStartup() {
     window,
     editorElement.docShell
   );
+  // The body of a Reply with Template is the user's own template, not a quote,
+  // so load its remote images even if the sender being replied to is blocked.
+  if (gComposeType == Ci.nsIMsgCompType.ReplyWithTemplate) {
+    gMsgCompose.allowRemoteContent = true;
+  }
 
   // If a message is a draft, we rely on draft status flags to decide
   // about encryption setting. Don't set gIsRelatedToEncryptedOriginal
