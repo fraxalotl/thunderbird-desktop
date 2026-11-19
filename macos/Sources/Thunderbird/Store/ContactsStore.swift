@@ -308,14 +308,40 @@ final class ContactsStore {
         }
       }
     }
-    for group in groups where group.name.lowercased().contains(query) {
-      results.insert(MailAddress(name: group.name, email: group.name), at: min(results.count, 0))
+    for group in groups where Self.matchesWordStart(group.name, query) {
+      results.insert(MailAddress(name: group.name, email: group.name), at: 0)
     }
-    for entry in collected.sorted(by: { $0.timesUsed > $1.timesUsed })
-    where entry.address.email.lowercased().contains(query) || (entry.address.name?.lowercased().contains(query) ?? false) {
+    let mostUsed = collected.sorted {
+      $0.timesUsed != $1.timesUsed ? $0.timesUsed > $1.timesUsed : $0.lastUsed > $1.lastUsed
+    }
+    for entry in mostUsed
+    where Self.matchesWordStart(entry.address.email, query) || Self.matchesWordStart(entry.address.name, query) {
       if seen.insert(entry.id).inserted { results.append(entry.address) }
     }
-    return Array(results.prefix(limit))
+    // Like Thunderbird, addresses whose name or email begin with the typed text come first, so
+    // the inline completion fills in what the user is typing rather than a looser match.
+    let startsWith = results.filter { Self.startsWith($0, query) }
+    let rest = results.filter { !Self.startsWith($0, query) }
+    return Array((startsWith + rest).prefix(limit))
+  }
+
+  /// Whether the address's display name or email begins with `query` (already lowercased).
+  nonisolated static func startsWith(_ address: MailAddress, _ query: String) -> Bool {
+    address.email.lowercased().hasPrefix(query) || (address.name?.lowercased().hasPrefix(query) ?? false)
+  }
+
+  /// Whether `query` (already lowercased) appears at the start of a word in `text`, so "f" matches
+  /// "Fraser" or "jo.fox@" but not the "f" inside "surface".
+  nonisolated static func matchesWordStart(_ text: String?, _ query: String) -> Bool {
+    guard let text = text?.lowercased(), !query.isEmpty else { return false }
+    var from = text.startIndex
+    while let range = text.range(of: query, range: from..<text.endIndex) {
+      if range.lowerBound == text.startIndex { return true }
+      let before = text[text.index(before: range.lowerBound)]
+      if !before.isLetter && !before.isNumber { return true }
+      from = text.index(after: range.lowerBound)
+    }
+    return false
   }
 
   /// Members of a contact group (mailing list) by name, for Expand List.

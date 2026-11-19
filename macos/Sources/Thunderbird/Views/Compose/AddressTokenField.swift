@@ -75,8 +75,12 @@ struct AddressTokenField: NSViewRepresentable {
       _ tokenField: NSTokenField, completionsForSubstring substring: String, indexOfToken tokenIndex: Int,
       indexOfSelectedItem selectedIndex: UnsafeMutablePointer<Int>?
     ) -> [Any]? {
-      let completions: [String] = MainActor.assumeIsolated { parent.suggestions(substring).map(\.formatted) }
-      return completions
+      let addresses: [MailAddress] = MainActor.assumeIsolated { parent.suggestions(substring) }
+      // NSTokenField replaces the typed text with the selected completion, so only preselect one
+      // that begins with what was typed; otherwise the list shows without overwriting the text.
+      let query = substring.trimmingCharacters(in: .whitespaces).lowercased()
+      selectedIndex?.pointee = addresses.firstIndex { ContactsStore.startsWith($0, query) } ?? -1
+      return addresses.map(\.formatted)
     }
 
     func tokenField(_ tokenField: NSTokenField, displayStringForRepresentedObject representedObject: Any) -> String? {
