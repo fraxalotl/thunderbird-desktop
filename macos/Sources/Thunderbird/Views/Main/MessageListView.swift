@@ -198,7 +198,10 @@ struct MessageListView: View {
     case "s": Task { await store.toggleStar() }
     case "j": Task { await store.markJunk(!shift) }
     case "a": Task { await store.moveSelected(to: .archive) }
-    case "r": Task { await store.markThreadRead() }
+    case "r":
+      guard !shift, let draft = store.replyDraft(store.loadedMessage?.account.kind == .nntp ? .newsgroup : .sender)
+      else { return .ignored }
+      openWindow(id: WindowID.compose, value: draft)
     case "c": if shift { Task { await store.markAllRead() } } else { ui.present(.markReadByDate) }
     case "f": store.navigate(.message, forward: true)
     case "b": store.navigate(.message, forward: false)

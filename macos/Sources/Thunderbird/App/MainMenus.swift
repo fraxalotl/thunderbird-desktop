@@ -153,7 +153,7 @@ struct MainMenus: Commands {
         Divider()
         Menu("Get New Messages for") {
           Button("All Accounts") { Task { await mail.refreshAll() } }
-            .keyboardShortcut("y", modifiers: [.command, .shift])
+            .keyboardShortcut("r")
           Button("Current Account") { if let id = mail.currentAccount?.id { Task { await mail.refresh(accountID: id) } } }
             .keyboardShortcut("y")
           Divider()

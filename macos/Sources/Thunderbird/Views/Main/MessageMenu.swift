@@ -28,8 +28,8 @@ struct MessageMenuItems: View {
       Button("New Message") { compose(store.newDraft()) }
         .keyboardShortcut("m", modifiers: [.command, .shift])
     }
+    // Reply is the bare R key in the message list (MessageListView.handleKey); Cmd+R gets new messages.
     Button("Reply") { compose(store.replyDraft(isNews ? .newsgroup : .sender)) }
-      .shortcut("r", [.command], inMenuBar)
       .disabled(loaded == nil)
     if isNews {
       Button("Followup to Newsgroup") { compose(store.replyDraft(.newsgroup)) }
@@ -113,6 +113,7 @@ struct MessageMenuItems: View {
       Button("As Read") { Task { await store.setFlag(MessageFlag.seen, on: true) } }
       Button("As Unread") { Task { await store.setFlag(MessageFlag.seen, on: false) } }
       Button("Thread As Read") { Task { await store.markThreadRead() } }
+        .shortcut("d", [.command], inMenuBar)
       Button("As Read by Date…") { ui?.present(.markReadByDate) }
       Button("All Read") { Task { await store.markAllRead() } }
         .shortcut("c", [.command, .shift, .option], inMenuBar)
