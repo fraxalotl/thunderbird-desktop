@@ -265,6 +265,11 @@ struct LoadedMessageView: View {
       }
     }
     .padding(12)
+    // A narrow column or a tall header must not raise the window's minimum size: when the
+    // content asks for more than the window has, SwiftUI centres it and pushes every column up
+    // under the toolbar.
+    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
+    .clipped()
     .animation(.smooth, value: allowRemote)
   }
 }
@@ -318,19 +323,23 @@ private struct MessageHeaderCard: View {
           } label: {
             Text(sender?.displayName ?? "(no sender)")
               .font(.headline)
+              .lineLimit(1)
           }
           .menuStyle(.button)
           .buttonStyle(.plain)
-          .fixedSize()
+          .fixedSize(horizontal: false, vertical: true)
           if let email = sender?.email, sender?.name != nil {
             Text(email)
               .font(.subheadline)
+              .lineLimit(1)
+              .truncationMode(.middle)
               .foregroundStyle(.secondary)
               .textSelection(.enabled)
           }
         }
         Spacer()
         actions
+          .layoutPriority(1)
       }
 
       HStack(alignment: .firstTextBaseline) {
@@ -793,5 +802,9 @@ struct WebPageView: NSViewRepresentable {
 
   func updateNSView(_ webView: WKWebView, context: Context) {
     if webView.url != url { webView.load(URLRequest(url: url)) }
+  }
+
+  func sizeThatFits(_ proposal: ProposedViewSize, nsView: WKWebView, context: Context) -> CGSize? {
+    proposal.replacingUnspecifiedDimensions(by: CGSize(width: 320, height: 200))
   }
 }

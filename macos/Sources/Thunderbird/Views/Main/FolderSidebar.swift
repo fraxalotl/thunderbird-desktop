@@ -359,11 +359,20 @@ private struct FolderPaneHeader: View {
           Toggle("Compact View", isOn: $compact)
         } label: {
           Image(systemName: "ellipsis")
+            .frame(width: 30)
+            .frame(maxHeight: .infinity)
+            .contentShape(.rect(cornerRadius: 6))
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .fixedSize()
+        // A glass-styled Menu sizes itself to the ellipsis glyph, which is much shorter than the
+        // neighbouring icons. Stretch it to the row's height and draw the glass ourselves instead.
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 6))
         .help("Folder pane options")
+        .accessibilityLabel("Folder pane options")
       }
+      .fixedSize(horizontal: false, vertical: true)
       .buttonStyle(.glass)
       .controlSize(.small)
     }

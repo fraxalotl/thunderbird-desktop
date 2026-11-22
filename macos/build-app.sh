@@ -31,9 +31,19 @@ for RNP in "${LIBRNP:-}" ../../obj-*/dist/bin/librnp.dylib /Applications/Thunder
     break
   fi
 done
-# Ad-hoc signatures change with every build. Pinning the designated requirement to the
-# bundle identifier lets Keychain recognise rebuilt copies of the app, so saved passwords
-# don't prompt for access after each build. Set CODESIGN_IDENTITY to sign with a real identity.
+# Keychain remembers which apps may read saved passwords by their signature. For an ad-hoc
+# signature that is the hash of this exact build, so every rebuild asks for the keychain
+# password again, once per account. A certificate gives rebuilt copies the same identity, so
+# sign with one when there is one: CODESIGN_IDENTITY if set, otherwise the first Developer ID
+# or Apple Development identity in the keychain.
+if [ -z "${CODESIGN_IDENTITY:-}" ]; then
+  CODESIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk '/"Developer ID Application:/ { print $2; exit }')"
+fi
+if [ -z "${CODESIGN_IDENTITY:-}" ]; then
+  CODESIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk '/"Apple Development:/ { print $2; exit }')"
+fi
 if [ -n "${CODESIGN_IDENTITY:-}" ]; then
   codesign --force --sign "$CODESIGN_IDENTITY" "$APP" >/dev/null
 else

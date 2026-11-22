@@ -36,6 +36,12 @@ struct MessageWebView: NSViewRepresentable {
     webView.loadHTMLString(rendered.html, baseURL: nil)
   }
 
+  /// The web view fills whatever space it's offered, so the page's own size never feeds back into
+  /// the window's layout.
+  func sizeThatFits(_ proposal: ProposedViewSize, nsView: WKWebView, context: Context) -> CGSize? {
+    proposal.replacingUnspecifiedDimensions(by: CGSize(width: 320, height: 200))
+  }
+
   final class Coordinator: NSObject, WKNavigationDelegate {
     var loaded: MessageHTML.Rendered?
     var onMailto: (URL) -> Void
